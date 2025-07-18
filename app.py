@@ -1,88 +1,63 @@
 import streamlit as st
-import sqlite3
-import difflib
-from gtts import gTTS
-from fpdf import FPDF
-from graphviz import Digraph
-from pathlib import Path
+import requests
 
-st.set_page_config(page_title="Assistant Coran IA", layout="wide")
-st.title("📖 Assistant Coran IA")
+# Configuration page
+st.set_page_config(page_title="Assistant Coran IA avec traduction et tafsir", layout="wide")
+st.title("📖 Assistant Coran IA avec traduction et tafsir")
 
-# Connexion SQLite
-conn = sqlite3.connect("memorisation.db")
-cursor = conn.cursor()
-cursor.execute("CREATE TABLE IF NOT EXISTS memorisation (mot TEXT, erreurs INT, date_dernier_test TEXT)")
-conn.commit()
+@st.cache_data(ttl=3600)
+def get_surah_list():
+    url = "https://api.alquran.cloud/v1/surah"
+    response = requests.get(url)
+    if response.status_code == 200:
+        data = response.json()
+        return [(s['number'], s['englishName'], s['name']) for s in data['data']]
+    else:
+        st.error("Erreur récupération sourates")
+        return []
 
-# API fictive : Texte coranique simulé
-coran = {
-    "Al-Fatiha": [
-        "Bismi Allahi alrrahmani alrraheemi",
-        "Alhamdu lillahi rabbi alAAalameena",
-        "Alrrahmani alrraheemi",
-        "Maliki yawmi alddeeni"
-    ]
-}
+@st.cache_data(ttl=3600)
+def get_verses_with_translations_and_tafsir(surah_number):
+    url_ar = f"https://api.alquran.cloud/v1/surah/{surah_number}/ar.alafasy"
+    url_fr = f"https://api.alquran.cloud/v1/surah/{surah_number}/fr"
+    url_tafsir = f"https://api.alquran.cloud/v1/surah/{surah_number}/tafsir/fr.jalalayn"
 
-# Sélection de sourate
-sourate = st.selectbox("Choisir une sourate", list(coran.keys()))
-versets = coran[sourate]
+    res_ar = requests.get(url_ar)
+    res_fr = requests.get(url_fr)
+    res_tafsir = requests.get(url_tafsir)
 
-# Récitation de l'utilisateur
-for i, verset in enumerate(versets):
-    st.markdown(f"### Verset {i+1}")
-    user_input = st.text_area("Ta récitation :", key=f"input_{i}")
-    expected = verset
+    if res_ar.status_code == 200 and res_fr.status_code == 200 and res_tafsir.status_code == 200:
+        data_ar = res_ar.json()['data']['ayahs']
+        data_fr = res_fr.json()['data']['ayahs']
+        data_tafsir = res_tafsir.json()['data']['ayahs']
 
-    if user_input:
-        ratio = difflib.SequenceMatcher(None, user_input.lower(), expected.lower()).ratio()
-        st.write(f"📊 Similarité : {int(ratio * 100)}%")
+        combined = []
+        for i in range(len(data_ar)):
+            combined.append((
+                data_ar[i]['text'],
+                data_fr[i]['text'],
+                data_tafsir[i]['text']
+            ))
+        return combined
+    else:
+        st.error("Erreur récupération des données")
+        return []
 
-        diff = []
-        for w1, w2 in zip(user_input.split(), expected.split()):
-            if w1 != w2:
-                diff.append((w1, w2))
-        if diff:
-            st.error("🔍 Mots incorrects : " + ", ".join([f"{w1} → {w2}" for w1, w2 in diff]))
-            for mot_err in diff:
-                cursor.execute("INSERT INTO memorisation (mot, erreurs, date_dernier_test) VALUES (?, 1, date('now'))", (mot_err[1],))
-            conn.commit()
+surah_list = get_surah_list()
+surah_names = [f"{num}. {eng} ({arab})" for num, eng, arab in surah_list]
+sourate_choice = st.selectbox("Choisir une sourate", surah_names)
+surah_number = int(sourate_choice.split(".")[0])
 
-        st.success("✅ Analyse terminée")
+versets = get_verses_with_translations_and_tafsir(surah_number)
 
-# Revoir les mots mal récités
-st.header("🔁 Revoir les mots mal récités")
-cursor.execute("SELECT mot, COUNT(*) as nb FROM memorisation GROUP BY mot ORDER BY nb DESC LIMIT 5")
-rows = cursor.fetchall()
-for mot, nb in rows:
-    st.write(f"**{mot}** — erreurs : {nb}")
-    if st.button(f"🔊 Écouter {mot}", key=mot):
-        tts = gTTS(mot, lang='ar')
-        audio_path = f"audio/{mot}.mp3"
-        tts.save(audio_path)
-        st.audio(audio_path)
+verse_index = st.number_input("Choisir numéro du verset", min_value=1, max_value=len(versets), value=1)
+texte_ar, traduction_fr, tafsir_fr = versets[verse_index - 1]
 
-# Génération d'un plan PDF
-if st.button("📄 Générer un plan PDF personnalisé"):
-    pdf = FPDF()
-    pdf.add_page()
-    pdf.set_font("Arial", size=14)
-    pdf.cell(200, 10, "Plan de révision — Mots à revoir", ln=True, align="C")
-    pdf.ln(10)
-    for mot, nb in rows:
-        pdf.cell(200, 10, f"{mot} — erreurs : {nb}", ln=True)
-    pdf_path = "plan_revision.pdf"
-    pdf.output(pdf_path)
-    st.success("📄 Fichier PDF généré")
-    st.download_button("⬇️ Télécharger le PDF", data=open(pdf_path, "rb"), file_name=pdf_path)
+st.markdown(f"### Verset {verse_index} — Arabe :")
+st.write(texte_ar)
 
-# Carte mentale avec Graphviz
-st.header("🧠 Carte mentale")
-dot = Digraph()
-dot.attr(size='8,5')
-dot.node("Révision")
-for mot, _ in rows:
-    dot.node(mot)
-    dot.edge("Révision", mot)
-st.graphviz_chart(dot.source)
+st.markdown("### Traduction française :")
+st.write(traduction_fr)
+
+st.markdown("### Tafsir Jalalayn (fr) :")
+st.write(tafsir_fr)
