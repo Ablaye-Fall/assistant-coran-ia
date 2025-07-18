@@ -1,6 +1,2 @@
 streamlit
-openai
-pydub
-gtts
-fpdf
-graphviz
+requests
