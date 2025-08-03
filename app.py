@@ -1,11 +1,31 @@
 # assistant-coran-ia/app.py
 import streamlit as st
 import requests
+import json
+import faiss
+import numpy as np
+from sentence_transformers import SentenceTransformer
 
-st.set_page_config(page_title="Assistant Coran IA", layout="centered")
-st.title("📖 Assistant Coran avec Traduction et Tafsir")
+# === Chargement modèle sémantique ===
+model = SentenceTransformer("paraphrase-MiniLM-L6-v2")
 
-# === Fonctions pour API AlQuran.cloud ===
+# === Chargement du fichier tafsir ===
+with open("tafsir_fr_complet.json", "r", encoding="utf-8") as f:
+    tafsir_data = json.load(f)
+
+# === Construction index sémantique FAISS ===
+tafsir_texts = []
+tafsir_keys = []
+for surah, verses in tafsir_data.items():
+    for ayah, text in verses.items():
+        tafsir_texts.append(text)
+        tafsir_keys.append((surah, ayah))
+
+embeddings = model.encode(tafsir_texts)
+index = faiss.IndexFlatL2(embeddings.shape[1])
+index.add(np.array(embeddings))
+
+# === Fonctions API AlQuran.cloud ===
 def get_surah_list():
     url = "http://api.alquran.cloud/v1/surah"
     response = requests.get(url)
@@ -16,22 +36,17 @@ def get_verses(surah_number, translation_code="en.asad"):
     response = requests.get(url)
     return response.json()["data"]
 
-def get_tafsir(surah_number, ayah_number):
-    url = f"http://api.quran-tafseer.com/quran/{surah_number}/{ayah_number}"
-    try:
-        response = requests.get(url)
-        data = response.json()
-        return data["text"] if data else "Tafsir non disponible."
-    except:
-        return "Tafsir non disponible."
+# === Interface Streamlit ===
+st.set_page_config(page_title="Assistant Coran IA", layout="centered")
+st.title("📖 Assistant Coran avec NLP")
 
-# === Choix de la sourate ===
+# Sélection de la sourate
 surahs = get_surah_list()
 surah_names = [f"{s['number']}. {s['englishName']} ({s['name']})" for s in surahs]
 surah_choice = st.selectbox("📚 Choisissez une sourate :", surah_names)
 surah_number = int(surah_choice.split('.')[0])
 
-# === Choix de la langue de traduction ===
+# Sélection de la langue
 translation_options = {
     "🇫🇷 Français (Hamidullah)": "fr.hamidullah",
     "🇬🇧 English (Muhammad Asad)": "en.asad",
@@ -42,24 +57,47 @@ translation_options = {
 translation_label = st.selectbox("🌐 Choisir une langue de traduction :", list(translation_options.keys()))
 translation_code = translation_options[translation_label]
 
-# === Versets ===
+# Récupération des versets
 verses_data = get_verses(surah_number, translation_code)
-versets = verses_data[0]['ayahs']  # Arabe
-traductions = verses_data[1]['ayahs']  # Traductions
+versets = verses_data[0]['ayahs']
+traductions = verses_data[1]['ayahs']
 
-if versets:
-    verse_index = st.number_input("Choisir numéro du verset", min_value=1, max_value=len(versets), value=1)
-    selected_verse = versets[verse_index - 1]
-    translated_verse = traductions[verse_index - 1]
+# Sélection du verset
+verse_index = st.number_input("📌 Choisir le numéro du verset :", min_value=1, max_value=len(versets), value=1)
+selected_verse = versets[verse_index - 1]
+translated_verse = traductions[verse_index - 1]
 
-    st.markdown("### 🕋 Verset en arabe")
-    st.markdown(f"**{selected_verse['text']}**")
+# Affichage
+st.markdown("### 🕋 Verset en arabe")
+st.markdown(f"**{selected_verse['text']}**")
 
-    st.markdown(f"### 🌍 Traduction ({translation_label})")
-    st.markdown(f"*{translated_verse['text']}*")
+st.markdown(f"### 🌍 Traduction ({translation_label})")
+st.markdown(f"*{translated_verse['text']}*")
 
-    st.markdown("### 📖 Tafsir (en arabe uniquement pour le moment)")
-    tafsir = get_tafsir(surah_number, verse_index)
-    st.markdown(tafsir)
-else:
-    st.warning("Aucun verset disponible pour cette sourate.")
+# Tafsir classique (local)
+st.markdown("### 📖 Tafsir classique (extrait)")
+surah_str = str(surah_number)
+ayah_str = str(verse_index)
+tafsir_text = tafsir_data.get(surah_str, {}).get(ayah_str, "Tafsir non disponible.")
+st.write(tafsir_text)
+
+# Recherche sémantique
+st.markdown("---")
+st.markdown("## 🔍 Recherche sémantique dans le Tafsir")
+query = st.text_input("Entrez un mot-clé ou une question :")
+if query:
+    query_vector = model.encode([query])
+    D, I = index.search(np.array(query_vector), k=3)
+    for idx in I[0]:
+        surah, ayah = tafsir_keys[idx]
+        st.markdown(f"**Sourate {surah}, Verset {ayah}**")
+        st.write(tafsir_data[surah][ayah])
+
+# Question-Réponse (placeholder à compléter avec un modèle local ou GPT)
+st.markdown("---")
+st.markdown("## ❓ Posez une question sur un verset ou tafsir")
+question = st.text_input("Votre question :")
+if question:
+    st.info("🔧 Fonction de réponse à la question à intégrer avec modèle local ou GPT.")
+
+
