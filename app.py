@@ -76,7 +76,7 @@ st.markdown(f"*{translated_verse['text']}*")
 
 # Tafsir classique (local)
 st.markdown("### 📖 Tafsir classique (extrait)")
-tafsir_key = f"{surah_number}:{verse_index}"
+tafsir_key = f"{int(surah_number)}:{int(verse_index)}"
 tafsir_entry = tafsir_data.get(tafsir_key)
 if tafsir_entry:
     st.markdown(f"*Source : {tafsir_entry.get('source', 'non spécifiée')}*")
