@@ -12,6 +12,8 @@ model = SentenceTransformer("paraphrase-MiniLM-L6-v2")
 # === Chargement du fichier tafsir ===
 with open("tafsir_fr_complet.json", "r", encoding="utf-8") as f:
     tafsir_data = json.load(f)
+st.markdown("### 🧪 Debug : Aperçu du JSON")
+st.json({k: tafsir_data[k] for k in list(tafsir_data.keys())[:5]})
 
 # === Construction index sémantique FAISS ===
 tafsir_texts = []
