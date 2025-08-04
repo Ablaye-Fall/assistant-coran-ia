@@ -4,4 +4,8 @@ scikit-learn>=1.2.2
 pandas>=1.5.3
 faiss-cpu
 numpy>=1.24.3
+deep-translator==1.11.4
+torch>=1.13.1
+transformers==4.41.2
+sentence-transformers==2.6.1
 sentence-transformers>=2.2.2
