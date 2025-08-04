@@ -114,13 +114,10 @@ st.markdown(f"*{translated_verse['text']}*")
 
 # Tafsir classique (local)
 st.markdown("### 📖 Tafsir classique (extrait)")
-tafsir_key = f"{int(surah_number)}:{int(verse_index)}"
-tafsir_entry = tafsir_data.get(tafsir_key)
-if tafsir_entry:
-    st.markdown(f"*Source : {tafsir_entry.get('source', 'non spécifiée')}*")
-    st.write(tafsir_entry.get("tafsir", "Contenu non disponible."))
-else:
-    st.warning("⚠️ Aucun tafsir trouvé pour ce verset.")
+langue_cible = st.selectbox("Choisir la langue de traduction :", ["fr", "en", "ar", "wolof"])
+st.markdown(f"**Traduction du tafsir en {langue_cible.upper()} :**")
+st.write(traduire_texte(tafsir, langue_cible))
+
 
 # Recherche sémantique
 st.markdown("---")
