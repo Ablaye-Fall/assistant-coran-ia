@@ -4,16 +4,52 @@ import requests
 import json
 import faiss
 import numpy as np
+from sentence_transformers import SentenceTransformer, util
+from deep_translator import GoogleTranslator
 from sentence_transformers import SentenceTransformer
 
 # === Chargement modèle sémantique ===
 model = SentenceTransformer("paraphrase-MiniLM-L6-v2")
 
+# Charger le modèle léger
+model = SentenceTransformer("all-MiniLM-L6-v2")
+
 # === Chargement du fichier tafsir ===
 with open("tafsir_fr_complet.json", "r", encoding="utf-8") as f:
     tafsir_data = json.load(f)
-st.markdown("### 🧪 Debug : Aperçu du JSON")
-st.json({k: tafsir_data[k] for k in list(tafsir_data.keys())[:5]})
+# Préparer les clés et textes
+tafsir_keys = list(tafsir_data.keys())
+tafsir_texts = list(tafsir_data.values())
+
+# Encoder tous les tafsir (à faire une seule fois)
+tafsir_embeddings = model.encode(tafsir_texts, convert_to_tensor=True)
+
+def trouver_tafsir_semantique(texte_verset):
+    """
+    Trouve le tafsir le plus proche sémantiquement du texte du verset donné.
+    """
+    # Encoder la requête
+    query_embedding = model.encode(texte_verset, convert_to_tensor=True)
+    
+    # Calculer la similarité
+    scores = util.pytorch_cos_sim(query_embedding, tafsir_embeddings)[0]
+    
+    # Trouver le meilleur score
+    best_idx = scores.argmax()
+    meilleur_tafsir = tafsir_texts[best_idx]
+    cle_associee = tafsir_keys[best_idx]
+    
+    return cle_associee, meilleur_tafsir
+    
+def traduire_texte(texte, langue_cible):
+    """
+    Traduit le texte donné vers la langue cible (ex: 'en', 'ar', 'fr', 'wolof')
+    """
+    try:
+        traduction = GoogleTranslator(source='auto', target=langue_cible).translate(texte)
+        return traduction
+    except Exception as e:
+        return f"Erreur de traduction : {e}"    
 
 # === Construction index sémantique FAISS ===
 tafsir_texts = []
