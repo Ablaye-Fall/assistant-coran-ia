@@ -3,3 +3,5 @@ requests==2.31.0
 sentence-transformers==2.6.1
 deep-translator==1.11.4
 scikit-learn==1.4.2
+numpy==1.26.4
+torch>=1.13.1
