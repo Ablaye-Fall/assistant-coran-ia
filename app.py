@@ -1,10 +1,10 @@
 import streamlit as st
 import requests
 import json
-import faiss
 import numpy as np
 from sentence_transformers import SentenceTransformer, util
 from deep_translator import GoogleTranslator
+from sklearn.neighbors import NearestNeighbors
 
 # === Chargement du modèle sémantique ===
 model = SentenceTransformer("all-MiniLM-L6-v2")
@@ -23,12 +23,17 @@ for key, text in tafsir_data.items():
 
 # Encoder tous les tafsir (à faire une seule fois)
 tafsir_embeddings = model.encode(textes_tafsir, convert_to_tensor=True)
+tafsir_embeddings_np = tafsir_embeddings.cpu().numpy()
+
+# === Recherche avec NearestNeighbors (au lieu de FAISS) ===
+nn_model = NearestNeighbors(n_neighbors=3, metric='cosine')
+nn_model.fit(tafsir_embeddings_np)
 
 def trouver_tafsir_semantique(texte_verset):
     """Trouve le tafsir le plus proche sémantiquement du verset donné"""
-    query_embedding = model.encode(texte_verset, convert_to_tensor=True)
-    scores = util.pytorch_cos_sim(query_embedding, tafsir_embeddings)[0]
-    best_idx = scores.argmax()
+    query_embedding = model.encode([texte_verset], convert_to_tensor=True).cpu().numpy()
+    distances, indices = nn_model.kneighbors(query_embedding)
+    best_idx = indices[0][0]
     meilleur_tafsir = textes_tafsir[best_idx]
     cle_associee = tafsir_keys[best_idx]
     return cle_associee, meilleur_tafsir
@@ -39,11 +44,6 @@ def traduire_texte(texte, langue_cible):
         return GoogleTranslator(source='auto', target=langue_cible).translate(texte)
     except Exception as e:
         return f"Erreur de traduction : {e}"
-
-# === FAISS : pour la recherche sémantique ===
-embeddings = model.encode(textes_tafsir)
-index = faiss.IndexFlatL2(embeddings.shape[1])
-index.add(np.array(embeddings))
 
 # === API AlQuran.cloud ===
 def obtenir_la_liste_des_surahs():
@@ -110,9 +110,9 @@ st.markdown("---")
 st.subheader("🔍 Recherche sémantique dans le Tafsir")
 requete = st.text_input("Entrez un mot-clé ou une question :")
 if requete:
-    req_embed = model.encode([requete])
-    D, I = index.search(np.array(req_embed), k=3)
-    for idx in I[0]:
+    req_embed = model.encode([requete], convert_to_tensor=True).cpu().numpy()
+    distances, indices = nn_model.kneighbors(req_embed)
+    for idx in indices[0]:
         st.markdown(f"**🔹 {tafsir_keys[idx]}**")
         st.write(textes_tafsir[idx])
 
