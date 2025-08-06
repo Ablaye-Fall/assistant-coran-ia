@@ -1,4 +1,3 @@
-
 import streamlit as st
 import requests
 import json
@@ -10,15 +9,15 @@ from sklearn.neighbors import NearestNeighbors
 # === Chargement du modèle sémantique ===
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
-# === Chargement du fichier tafsir ===
+# === Chargement du fichier tafsir sq-saadi.json ===
 try:
-    with open("tafsir_fr_complet.json", "r", encoding="utf-8") as f:
+    with open("sq-saadi.json", "r", encoding="utf-8") as f:
         tafsir_data = json.load(f)
 except Exception as e:
     st.error(f"❌ Erreur de chargement du fichier tafsir : {e}")
     st.stop()
 
-# === Extraction des textes de tafsir ===
+# Extraction des textes de tafsir
 textes_tafsir = []
 tafsir_keys = []
 for key, value in tafsir_data.items():
@@ -28,10 +27,10 @@ for key, value in tafsir_data.items():
         tafsir_keys.append(key)
 
 if not textes_tafsir:
-    st.error("❌ Aucun texte de tafsir valide trouvé.")
+    st.error("❌ Aucun texte de tafsir valide trouvé dans sq-saadi.json.")
     st.stop()
 
-# === Encodage sémantique ===
+# Encodage sémantique
 tafsir_embeddings = model.encode(textes_tafsir, convert_to_tensor=True)
 tafsir_embeddings_np = tafsir_embeddings.cpu().numpy()
 
@@ -39,7 +38,7 @@ if tafsir_embeddings_np.ndim != 2 or tafsir_embeddings_np.shape[0] == 0:
     st.error(f"❌ Encodage invalide des vecteurs. Dimensions : {tafsir_embeddings_np.shape}")
     st.stop()
 
-# === Initialisation du modèle de recherche ===
+# Modèle Nearest Neighbors
 nn_model = NearestNeighbors(n_neighbors=3, metric='cosine')
 nn_model.fit(tafsir_embeddings_np)
 
@@ -67,7 +66,7 @@ def obtenir_vers(surah_number, translation_code="en.asad"):
 
 # === Interface utilisateur ===
 st.set_page_config(page_title="Assistant Coran IA", layout="centered")
-st.title("📖 Assistant Coran avec IA")
+st.title("📖 Assistant Coran avec IA (Tafsir Saadi - ES)")
 
 # Choix sourate
 sourates = obtenir_la_liste_des_surahs()
@@ -118,7 +117,7 @@ try:
     cle, tafsir = trouver_tafsir_semantique(verset_sel['text'])
     st.write(tafsir)
 
-    langue_trad = st.selectbox("🌐 Traduire le tafsir en :", ["fr", "en", "ar", "wolof"], key="langue_tafsir")
+    langue_trad = st.selectbox("🌐 Traduire le tafsir en :", ["es", "fr", "en", "ar", "wolof"], key="langue_tafsir")
     traduction_tafsir = traduire_texte(tafsir, langue_trad)
     st.markdown(f"**Traduction du tafsir en {langue_trad.upper()} :**")
     st.write(traduction_tafsir)
