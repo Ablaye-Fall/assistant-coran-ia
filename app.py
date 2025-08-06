@@ -1,3 +1,4 @@
+
 import streamlit as st
 import requests
 import json
@@ -17,30 +18,28 @@ except Exception as e:
     st.error(f"❌ Erreur de chargement du fichier tafsir : {e}")
     st.stop()
 
-# Préparer les clés et textes valides
+# === Extraction des textes de tafsir ===
 textes_tafsir = []
 tafsir_keys = []
-for key, text in tafsir_data.items():
-    if isinstance(text, str) and len(text.strip()) > 5:
-        textes_tafsir.append(text.strip())
+for key, value in tafsir_data.items():
+    tafsir_texte = value.get("tafsir", "").strip()
+    if tafsir_texte:
+        textes_tafsir.append(tafsir_texte)
         tafsir_keys.append(key)
 
-# Vérification : y a-t-il des tafsirs valides ?
-if len(textes_tafsir) == 0:
+if not textes_tafsir:
     st.error("❌ Aucun texte de tafsir valide trouvé.")
     st.stop()
 
-# Encodage sémantique
+# === Encodage sémantique ===
 tafsir_embeddings = model.encode(textes_tafsir, convert_to_tensor=True)
-
-# Vérification de la forme des vecteurs
-if tafsir_embeddings.shape[0] == 0 or tafsir_embeddings.ndim != 2:
-    st.error(f"❌ Erreur d'encodage : forme invalide {tafsir_embeddings.shape}")
-    st.stop()
-
 tafsir_embeddings_np = tafsir_embeddings.cpu().numpy()
 
-# Initialisation modèle de recherche sémantique
+if tafsir_embeddings_np.ndim != 2 or tafsir_embeddings_np.shape[0] == 0:
+    st.error(f"❌ Encodage invalide des vecteurs. Dimensions : {tafsir_embeddings_np.shape}")
+    st.stop()
+
+# === Initialisation du modèle de recherche ===
 nn_model = NearestNeighbors(n_neighbors=3, metric='cosine')
 nn_model.fit(tafsir_embeddings_np)
 
@@ -70,7 +69,7 @@ def obtenir_vers(surah_number, translation_code="en.asad"):
 st.set_page_config(page_title="Assistant Coran IA", layout="centered")
 st.title("📖 Assistant Coran avec IA")
 
-# Choix de la sourate
+# Choix sourate
 sourates = obtenir_la_liste_des_surahs()
 sourate_noms = [f"{s['number']}. {s['englishName']} ({s['name']})" for s in sourates]
 
@@ -88,7 +87,7 @@ with st.container():
     traduction_label = st.selectbox("🌐 Choisir une langue de traduction :", list(traduction_options.keys()), key="choix_langue")
     code_traduction = traduction_options[traduction_label]
 
-# Mémorisation API versets
+# Mémo des versets
 if (
     "versets_data" not in st.session_state
     or st.session_state.get("last_sourate") != num_sourate
@@ -100,7 +99,7 @@ if (
 
 versets_data = st.session_state.versets_data
 
-# Affichage verset
+# Affichage verset et tafsir
 try:
     versets_ar = versets_data[0]["ayahs"]
     versets_trad = versets_data[1]["ayahs"]
@@ -125,7 +124,7 @@ try:
     st.write(traduction_tafsir)
 
 except Exception as e:
-    st.error(f"❌ Erreur lors de l'affichage du verset : {e}")
+    st.error(f"❌ Erreur lors de l'affichage du verset ou tafsir : {e}")
     st.stop()
 
 # Recherche sémantique
@@ -140,11 +139,11 @@ if requete:
             st.markdown(f"**🔹 {tafsir_keys[idx]}**")
             st.write(textes_tafsir[idx])
     except Exception as e:
-        st.error(f"❌ Erreur dans la recherche sémantique : {e}")
+        st.error(f"❌ Erreur dans la recherche : {e}")
 
-# Bloc Question-Réponse
+# Bloc Question-Réponse (à venir)
 st.markdown("---")
 st.subheader("❓ Posez une question sur un verset ou tafsir")
 question = st.text_input("Votre question :")
 if question:
-    st.info("🔧 Fonction de réponse à la question à intégrer avec modèle local ou GPT.")
+    st.info("🔧 Fonction de réponse à intégrer avec modèle local ou GPT.")
