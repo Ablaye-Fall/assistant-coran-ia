@@ -112,7 +112,6 @@ cle_exacte = f"{num_sourate}:{verset_num}"
 tafsir = tafsir_data.get(cle_exacte, {}).get("text", "❌ Aucun tafsir disponible pour ce verset.")
 
 st.subheader("📖 Tafsir correspondant exactement au verset")
-st.markdown(f"🔹 **Clé : {cle_exacte}**")
 st.write(tafsir)
 
 # Traduction du tafsir
