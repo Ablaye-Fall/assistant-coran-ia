@@ -21,31 +21,26 @@ for key, text in tafsir_data.items():
         textes_tafsir.append(text)
         tafsir_keys.append(key)
 
-# Encoder tous les tafsir (à faire une seule fois)
+# Encoder tous les tafsir
 tafsir_embeddings = model.encode(textes_tafsir, convert_to_tensor=True)
 tafsir_embeddings_np = tafsir_embeddings.cpu().numpy()
 
-# === Recherche avec NearestNeighbors (au lieu de FAISS) ===
+# Recherche avec NearestNeighbors
 nn_model = NearestNeighbors(n_neighbors=3, metric='cosine')
 nn_model.fit(tafsir_embeddings_np)
 
 def trouver_tafsir_semantique(texte_verset):
-    """Trouve le tafsir le plus proche sémantiquement du verset donné"""
     query_embedding = model.encode([texte_verset], convert_to_tensor=True).cpu().numpy()
     distances, indices = nn_model.kneighbors(query_embedding)
     best_idx = indices[0][0]
-    meilleur_tafsir = textes_tafsir[best_idx]
-    cle_associee = tafsir_keys[best_idx]
-    return cle_associee, meilleur_tafsir
+    return tafsir_keys[best_idx], textes_tafsir[best_idx]
 
 def traduire_texte(texte, langue_cible):
-    """Traduit le texte vers la langue cible"""
     try:
         return GoogleTranslator(source='auto', target=langue_cible).translate(texte)
     except Exception as e:
         return f"Erreur de traduction : {e}"
 
-# === API AlQuran.cloud ===
 def obtenir_la_liste_des_surahs():
     url = "http://api.alquran.cloud/v1/surah"
     response = requests.get(url)
@@ -60,50 +55,66 @@ def obtenir_vers(surah_number, translation_code="en.asad"):
 st.set_page_config(page_title="Assistant Coran IA", layout="centered")
 st.title("📖 Assistant Coran avec IA")
 
-# Choix sourate
+# Chargement des sourates
 sourates = obtenir_la_liste_des_surahs()
 sourate_noms = [f"{s['number']}. {s['englishName']} ({s['name']})" for s in sourates]
-choix_sourate = st.selectbox("📚 Choisissez une sourate :", sourate_noms)
-num_sourate = int(choix_sourate.split(".")[0])
 
-# Choix langue de traduction
-traduction_options = {
-    "🇫🇷 Français (Hamidullah)": "fr.hamidullah",
-    "🇬🇧 Anglais (Muhammad Asad)": "en.asad",
-    "🇮🇩 Indonésien": "id.indonesian",
-    "🇹🇷 Turc": "tr.translator",
-    "🇺🇿 Ouzbek": "uz.sodik"
-}
-traduction_label = st.selectbox("🌐 Choisir une langue de traduction :", list(traduction_options.keys()))
-code_traduction = traduction_options[traduction_label]
+# Sélection de la sourate et traduction avec stabilité
+with st.container():
+    choix_sourate = st.selectbox("📚 Choisissez une sourate :", sourate_noms, key="choix_sourate")
+    num_sourate = int(choix_sourate.split(".")[0])
 
-# Récupération versets
-versets_data = obtenir_vers(num_sourate, code_traduction)
-versets_ar = versets_data[0]["ayahs"]
-versets_trad = versets_data[1]["ayahs"]
+    traduction_options = {
+        "🇫🇷 Français (Hamidullah)": "fr.hamidullah",
+        "🇬🇧 Anglais (Muhammad Asad)": "en.asad",
+        "🇮🇩 Indonésien": "id.indonesian",
+        "🇹🇷 Turc": "tr.translator",
+        "🇺🇿 Ouzbek": "uz.sodik"
+    }
+    traduction_label = st.selectbox("🌐 Choisir une langue de traduction :", list(traduction_options.keys()), key="choix_langue")
+    code_traduction = traduction_options[traduction_label]
 
-# Choix du verset
-verset_num = st.number_input("📌 Choisir le numéro du verset :", min_value=1, max_value=len(versets_ar), value=1)
-verset_sel = versets_ar[verset_num - 1]
-verset_trad = versets_trad[verset_num - 1]
+# Mémorisation dans session_state pour éviter rechargements inutiles
+if (
+    "versets_data" not in st.session_state
+    or st.session_state.get("last_sourate") != num_sourate
+    or st.session_state.get("last_langue") != code_traduction
+):
+    st.session_state.versets_data = obtenir_vers(num_sourate, code_traduction)
+    st.session_state.last_sourate = num_sourate
+    st.session_state.last_langue = code_traduction
 
-# Affichage
-st.subheader("🕋 Verset en arabe")
-st.write(f"**{verset_sel['text']}**")
+versets_data = st.session_state.versets_data
 
-st.subheader(f"🌍 Traduction ({traduction_label})")
-st.write(f"*{verset_trad['text']}*")
+# Affichage du verset
+try:
+    versets_ar = versets_data[0]["ayahs"]
+    versets_trad = versets_data[1]["ayahs"]
 
-# Tafsir sémantique
-st.subheader("📖 Tafsir extrait (selon le sens du verset)")
-cle, tafsir = trouver_tafsir_semantique(verset_sel['text'])
-st.write(tafsir)
+    verset_num = st.number_input("📌 Choisir le numéro du verset :", min_value=1, max_value=len(versets_ar), value=1)
+    verset_sel = versets_ar[verset_num - 1]
+    verset_trad = versets_trad[verset_num - 1]
 
-# Traduction du tafsir
-langue_trad = st.selectbox("🌐 Traduire le tafsir en :", ["fr", "en", "ar", "wolof"])
-traduction_tafsir = traduire_texte(tafsir, langue_trad)
-st.markdown(f"**Traduction du tafsir en {langue_trad.upper()} :**")
-st.write(traduction_tafsir)
+    st.subheader("🕋 Verset en arabe")
+    st.write(f"**{verset_sel['text']}**")
+
+    st.subheader(f"🌍 Traduction ({traduction_label})")
+    st.write(f"*{verset_trad['text']}*")
+
+    # Tafsir sémantique
+    st.subheader("📖 Tafsir extrait (selon le sens du verset)")
+    cle, tafsir = trouver_tafsir_semantique(verset_sel['text'])
+    st.write(tafsir)
+
+    # Traduction du tafsir
+    langue_trad = st.selectbox("🌐 Traduire le tafsir en :", ["fr", "en", "ar", "wolof"], key="langue_tafsir")
+    traduction_tafsir = traduire_texte(tafsir, langue_trad)
+    st.markdown(f"**Traduction du tafsir en {langue_trad.upper()} :**")
+    st.write(traduction_tafsir)
+
+except Exception as e:
+    st.error(f"Erreur lors du chargement du verset : {e}")
+    st.stop()
 
 # Recherche sémantique
 st.markdown("---")
