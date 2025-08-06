@@ -8,46 +8,23 @@ from sentence_transformers import SentenceTransformer
 from deep_translator import GoogleTranslator
 from sklearn.neighbors import NearestNeighbors
 
-# === Mise en cache du modèle ===
+# === Caching ===
 @st.cache_resource
 def load_model():
     return SentenceTransformer("all-MiniLM-L6-v2")
 
 model = load_model()
 
-# === Chargement du fichier tafsir ===
-try:
-    with open("sq-saadi.json", "r", encoding="utf-8") as f:
-        tafsir_data = json.load(f)
-except Exception as e:
-    st.error(f"❌ Erreur de chargement du fichier tafsir : {e}")
-    st.stop()
-
-# Extraction des textes depuis la clé "text"
-textes_tafsir = []
-tafsir_keys = []
-for key, value in tafsir_data.items():
-    if isinstance(value, dict):
-        tafsir_texte = value.get("text", "").strip()
-        if isinstance(tafsir_texte, str) and tafsir_texte:
-            textes_tafsir.append(tafsir_texte)
-            tafsir_keys.append(key)
-
-if not textes_tafsir:
-    st.error("❌ Aucun texte de tafsir valide trouvé dans sq-saadi.json.")
-    st.stop()
-
-# Encodage mis en cache
 @st.cache_data
-def get_encoded_tafsir(textes):
-    embeddings = model.encode(textes, convert_to_tensor=True)
-    return embeddings.cpu().numpy()
+def obtenir_la_liste_des_surahs():
+    url = "http://api.alquran.cloud/v1/surah"
+    response = requests.get(url)
+    return response.json()["data"]
 
-tafsir_embeddings_np = get_encoded_tafsir(textes_tafsir)
-
-# Recherche sémantique
-nn_model = NearestNeighbors(n_neighbors=3, metric='cosine')
-nn_model.fit(tafsir_embeddings_np)
+def obtenir_vers(surah_number, translation_code="en.asad"):
+    url = f"http://api.alquran.cloud/v1/surah/{surah_number}/editions/quran-simple,{translation_code}"
+    response = requests.get(url)
+    return response.json()["data"]
 
 def nettoyer_html(texte):
     return re.sub(r'<[^>]+>', '', texte)
@@ -61,22 +38,44 @@ def traduire_texte(texte, langue_cible):
     except Exception as e:
         return f"Erreur de traduction : {e}"
 
-@st.cache_data(ttl=86400)
-def obtenir_la_liste_des_surahs():
-    url = "http://api.alquran.cloud/v1/surah"
-    response = requests.get(url)
-    return response.json()["data"]
+# === Chargement du fichier de tafsir ===
+try:
+    with open("sq-saadi.json", "r", encoding="utf-8") as f:
+        tafsir_data = json.load(f)
+except Exception as e:
+    st.error(f"❌ Erreur de chargement du fichier tafsir : {e}")
+    st.stop()
 
-def obtenir_vers(surah_number, translation_code="en.asad"):
-    url = f"http://api.alquran.cloud/v1/surah/{surah_number}/editions/quran-simple,{translation_code}"
-    response = requests.get(url)
-    return response.json()["data"]
+# Extraction textes + clés
+textes_tafsir = []
+tafsir_keys = []
+for key, value in tafsir_data.items():
+    if isinstance(value, dict):
+        tafsir_texte = value.get("text", "").strip()
+        if isinstance(tafsir_texte, str) and tafsir_texte:
+            textes_tafsir.append(tafsir_texte)
+            tafsir_keys.append(key)
+
+if not textes_tafsir:
+    st.error("❌ Aucun texte de tafsir valide trouvé dans sq-saadi.json.")
+    st.stop()
+
+@st.cache_data
+def get_encoded_tafsir(textes):
+    embeddings = model.encode(textes, convert_to_tensor=True)
+    return embeddings.cpu().numpy()
+
+tafsir_embeddings_np = get_encoded_tafsir(textes_tafsir)
+
+# NearestNeighbors
+nn_model = NearestNeighbors(n_neighbors=3, metric='cosine')
+nn_model.fit(tafsir_embeddings_np)
 
 # === Interface utilisateur ===
 st.set_page_config(page_title="Assistant Coran IA", layout="centered")
-st.title("📖 Assistant Coran avec IA (Tafsir As-Saadi - sq-saadi.json)")
+st.title("📖 Assistant Coran avec IA (Tafsir As-Saadi)")
 
-# Choix de la sourate
+# Choix sourate
 sourates = obtenir_la_liste_des_surahs()
 sourate_noms = [f"{s['number']}. {s['englishName']} ({s['name']})" for s in sourates]
 choix_sourate = st.selectbox("📚 Choisissez une sourate :", sourate_noms)
@@ -110,15 +109,17 @@ st.write(f"**{verset_sel['text']}**")
 st.subheader(f"🌍 Traduction ({traduction_label})")
 st.write(f"*{verset_trad['text']}*")
 
-# Récupération du tafsir brut, nettoyage HTML + suppression bloc <b><i>
+# Tafsir exact par clé
 cle_exacte = f"{num_sourate}:{verset_num}"
-tafsir = tafsir_data.get(cle_exacte, {}).get("text", "")
+tafsir = tafsir_data.get(cle_exacte, {}).get("text", "❌ Aucun tafsir disponible pour ce verset.")
 tafsir_sans_bi = supprimer_blocs_balises_bi(tafsir)
 tafsir_clean = nettoyer_html(tafsir_sans_bi)
 
-# 🔥 AFFICHAGE UNIQUEMENT DE LA TRADUCTION
-st.subheader("🌐 Traduire le tafsir")
-langue_trad = st.selectbox("Choisir la langue de traduction :", ["fr", "en", "ar", "es", "wolof"])
+st.subheader("📖 Tafsir du verset")
+st.write(tafsir_clean)
+
+# Traduction du tafsir
+langue_trad = st.selectbox("🌐 Traduire le tafsir en :", ["fr", "en", "ar", "es", "wolof"])
 traduction_tafsir = traduire_texte(tafsir_clean, langue_trad)
 st.markdown(f"**Traduction du tafsir en {langue_trad.upper()} :**")
 st.write(traduction_tafsir)
@@ -128,4 +129,12 @@ st.markdown("---")
 st.subheader("❓ Posez une question sur un verset ou tafsir")
 question = st.text_input("Votre question :")
 if question:
-    st.info("🔧 Réponse automatique à venir (modèle local ou GPT).")
+    query_embed = model.encode([question], convert_to_tensor=True).cpu().numpy()
+    distances, indices = nn_model.kneighbors(query_embed)
+    reponse = textes_tafsir[indices[0][0]]
+    reponse_clean = nettoyer_html(supprimer_blocs_balises_bi(reponse))
+    st.markdown("**🧠 Réponse la plus pertinente :**")
+    st.write(reponse_clean)
+    traduction_reponse = traduire_texte(reponse_clean, langue_trad)
+    st.markdown(f"**🌐 Traduction en {langue_trad.upper()} :**")
+    st.write(traduction_reponse)
