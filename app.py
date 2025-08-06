@@ -6,10 +6,14 @@ from sentence_transformers import SentenceTransformer
 from deep_translator import GoogleTranslator
 from sklearn.neighbors import NearestNeighbors
 
-# === Chargement du modèle sémantique ===
-model = SentenceTransformer("all-MiniLM-L6-v2")
+# === Mise en cache du modèle ===
+@st.cache_resource
+def load_model():
+    return SentenceTransformer("all-MiniLM-L6-v2")
 
-# === Chargement du fichier sq-saadi.json ===
+model = load_model()
+
+# === Chargement du fichier tafsir ===
 try:
     with open("sq-saadi.json", "r", encoding="utf-8") as f:
         tafsir_data = json.load(f)
@@ -31,9 +35,13 @@ if not textes_tafsir:
     st.error("❌ Aucun texte de tafsir valide trouvé dans sq-saadi.json.")
     st.stop()
 
-# Encodage sémantique
-tafsir_embeddings = model.encode(textes_tafsir, convert_to_tensor=True)
-tafsir_embeddings_np = tafsir_embeddings.cpu().numpy()
+# Encodage mis en cache
+@st.cache_data
+def get_encoded_tafsir(textes):
+    embeddings = model.encode(textes, convert_to_tensor=True)
+    return embeddings.cpu().numpy()
+
+tafsir_embeddings_np = get_encoded_tafsir(textes_tafsir)
 
 # Recherche sémantique
 nn_model = NearestNeighbors(n_neighbors=3, metric='cosine')
@@ -51,6 +59,7 @@ def traduire_texte(texte, langue_cible):
     except Exception as e:
         return f"Erreur de traduction : {e}"
 
+@st.cache_data(ttl=86400)
 def obtenir_la_liste_des_surahs():
     url = "http://api.alquran.cloud/v1/surah"
     response = requests.get(url)
@@ -71,7 +80,7 @@ sourate_noms = [f"{s['number']}. {s['englishName']} ({s['name']})" for s in sour
 choix_sourate = st.selectbox("📚 Choisissez une sourate :", sourate_noms)
 num_sourate = int(choix_sourate.split(".")[0])
 
-# Choix de la langue de traduction
+# Choix langue de traduction
 traduction_options = {
     "🇫🇷 Français (Hamidullah)": "fr.hamidullah",
     "🇬🇧 Anglais (Muhammad Asad)": "en.asad",
@@ -87,7 +96,7 @@ versets_data = obtenir_vers(num_sourate, code_traduction)
 versets_ar = versets_data[0]["ayahs"]
 versets_trad = versets_data[1]["ayahs"]
 
-# Sélection du verset
+# Choix du verset
 verset_num = st.number_input("📌 Choisir le numéro du verset :", min_value=1, max_value=len(versets_ar), value=1)
 verset_sel = versets_ar[verset_num - 1]
 verset_trad = versets_trad[verset_num - 1]
@@ -99,19 +108,19 @@ st.write(f"**{verset_sel['text']}**")
 st.subheader(f"🌍 Traduction ({traduction_label})")
 st.write(f"*{verset_trad['text']}*")
 
-# Recherche du tafsir sémantiquement proche
-st.subheader("📖 Tafsir extrait (selon le sens du verset)")
+# Affichage du tafsir
+st.subheader("📖 Tafsir extrait (sémantique)")
 cle, tafsir = trouver_tafsir_semantique(verset_sel['text'])
 st.markdown(f"🔹 **Clé : {cle}**")
 st.write(tafsir)
 
 # Traduction du tafsir
-langue_trad = st.selectbox("🌐 Traduire le tafsir en :", ["fr", "en", "ar", "wolof"])
+langue_trad = st.selectbox("🌐 Traduire le tafsir en :", ["fr", "en", "ar", "es", "wolof"])
 traduction_tafsir = traduire_texte(tafsir, langue_trad)
 st.markdown(f"**Traduction du tafsir en {langue_trad.upper()} :**")
 st.write(traduction_tafsir)
 
-# Recherche sémantique dans le corpus
+# Recherche sémantique dans le tafsir
 st.markdown("---")
 st.subheader("🔍 Recherche sémantique dans le Tafsir")
 requete = st.text_input("Entrez un mot-clé ou une question :")
@@ -122,9 +131,9 @@ if requete:
         st.markdown(f"**🔹 {tafsir_keys[idx]}**")
         st.write(textes_tafsir[idx])
 
-# Bloc Question-Réponse
+# Bloc Q&A
 st.markdown("---")
 st.subheader("❓ Posez une question sur un verset ou tafsir")
 question = st.text_input("Votre question :")
 if question:
-    st.info("🔧 Fonction de réponse à intégrer (modèle local ou GPT).")
+    st.info("🔧 Réponse automatique à venir (modèle local ou GPT).")
