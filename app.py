@@ -2,6 +2,7 @@ import streamlit as st
 import requests
 import json
 import numpy as np
+import os
 from sentence_transformers import SentenceTransformer
 from deep_translator import GoogleTranslator
 from sklearn.neighbors import NearestNeighbors
@@ -47,11 +48,9 @@ tafsir_embeddings_np = get_encoded_tafsir(textes_tafsir)
 nn_model = NearestNeighbors(n_neighbors=3, metric='cosine')
 nn_model.fit(tafsir_embeddings_np)
 
-def trouver_tafsir_semantique(texte_verset):
-    query_embedding = model.encode([texte_verset], convert_to_tensor=True).cpu().numpy()
-    distances, indices = nn_model.kneighbors(query_embedding)
-    best_idx = indices[0][0]
-    return tafsir_keys[best_idx], textes_tafsir[best_idx]
+def nettoyer_html(texte):
+    import re
+    return re.sub(r'<[^>]+>', '', texte)
 
 def traduire_texte(texte, langue_cible):
     try:
@@ -108,28 +107,20 @@ st.write(f"**{verset_sel['text']}**")
 st.subheader(f"🌍 Traduction ({traduction_label})")
 st.write(f"*{verset_trad['text']}*")
 
-# Affichage du tafsir
-st.subheader("📖 Tafsir extrait (sémantique)")
-cle, tafsir = trouver_tafsir_semantique(verset_sel['text'])
-st.markdown(f"🔹 **Clé : {cle}**")
+# Affichage du tafsir exact par clé
+cle_exacte = f"{num_sourate}:{verset_num}"
+tafsir = tafsir_data.get(cle_exacte, {}).get("text", "❌ Aucun tafsir disponible pour ce verset.")
+
+st.subheader("📖 Tafsir correspondant exactement au verset")
+st.markdown(f"🔹 **Clé : {cle_exacte}**")
 st.write(tafsir)
 
 # Traduction du tafsir
 langue_trad = st.selectbox("🌐 Traduire le tafsir en :", ["fr", "en", "ar", "es", "wolof"])
-traduction_tafsir = traduire_texte(tafsir, langue_trad)
+tafsir_clean = nettoyer_html(tafsir)
+traduction_tafsir = traduire_texte(tafsir_clean, langue_trad)
 st.markdown(f"**Traduction du tafsir en {langue_trad.upper()} :**")
 st.write(traduction_tafsir)
-
-# Recherche sémantique dans le tafsir
-st.markdown("---")
-st.subheader("🔍 Recherche sémantique dans le Tafsir")
-requete = st.text_input("Entrez un mot-clé ou une question :")
-if requete:
-    req_embed = model.encode([requete], convert_to_tensor=True).cpu().numpy()
-    distances, indices = nn_model.kneighbors(req_embed)
-    for idx in indices[0]:
-        st.markdown(f"**🔹 {tafsir_keys[idx]}**")
-        st.write(textes_tafsir[idx])
 
 # Bloc Q&A
 st.markdown("---")
