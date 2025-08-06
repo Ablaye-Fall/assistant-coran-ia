@@ -10,22 +10,37 @@ from sklearn.neighbors import NearestNeighbors
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
 # === Chargement du fichier tafsir ===
-with open("tafsir_fr_complet.json", "r", encoding="utf-8") as f:
-    tafsir_data = json.load(f)
+try:
+    with open("tafsir_fr_complet.json", "r", encoding="utf-8") as f:
+        tafsir_data = json.load(f)
+except Exception as e:
+    st.error(f"❌ Erreur de chargement du fichier tafsir : {e}")
+    st.stop()
 
-# Préparer les clés et textes
+# Préparer les clés et textes valides
 textes_tafsir = []
 tafsir_keys = []
 for key, text in tafsir_data.items():
-    if isinstance(text, str):
-        textes_tafsir.append(text)
+    if isinstance(text, str) and len(text.strip()) > 5:
+        textes_tafsir.append(text.strip())
         tafsir_keys.append(key)
 
-# Encoder tous les tafsir
+# Vérification : y a-t-il des tafsirs valides ?
+if len(textes_tafsir) == 0:
+    st.error("❌ Aucun texte de tafsir valide trouvé.")
+    st.stop()
+
+# Encodage sémantique
 tafsir_embeddings = model.encode(textes_tafsir, convert_to_tensor=True)
+
+# Vérification de la forme des vecteurs
+if tafsir_embeddings.shape[0] == 0 or tafsir_embeddings.ndim != 2:
+    st.error(f"❌ Erreur d'encodage : forme invalide {tafsir_embeddings.shape}")
+    st.stop()
+
 tafsir_embeddings_np = tafsir_embeddings.cpu().numpy()
 
-# Recherche avec NearestNeighbors
+# Initialisation modèle de recherche sémantique
 nn_model = NearestNeighbors(n_neighbors=3, metric='cosine')
 nn_model.fit(tafsir_embeddings_np)
 
@@ -55,11 +70,10 @@ def obtenir_vers(surah_number, translation_code="en.asad"):
 st.set_page_config(page_title="Assistant Coran IA", layout="centered")
 st.title("📖 Assistant Coran avec IA")
 
-# Chargement des sourates
+# Choix de la sourate
 sourates = obtenir_la_liste_des_surahs()
 sourate_noms = [f"{s['number']}. {s['englishName']} ({s['name']})" for s in sourates]
 
-# Sélection de la sourate et traduction avec stabilité
 with st.container():
     choix_sourate = st.selectbox("📚 Choisissez une sourate :", sourate_noms, key="choix_sourate")
     num_sourate = int(choix_sourate.split(".")[0])
@@ -74,7 +88,7 @@ with st.container():
     traduction_label = st.selectbox("🌐 Choisir une langue de traduction :", list(traduction_options.keys()), key="choix_langue")
     code_traduction = traduction_options[traduction_label]
 
-# Mémorisation dans session_state pour éviter rechargements inutiles
+# Mémorisation API versets
 if (
     "versets_data" not in st.session_state
     or st.session_state.get("last_sourate") != num_sourate
@@ -86,7 +100,7 @@ if (
 
 versets_data = st.session_state.versets_data
 
-# Affichage du verset
+# Affichage verset
 try:
     versets_ar = versets_data[0]["ayahs"]
     versets_trad = versets_data[1]["ayahs"]
@@ -101,19 +115,17 @@ try:
     st.subheader(f"🌍 Traduction ({traduction_label})")
     st.write(f"*{verset_trad['text']}*")
 
-    # Tafsir sémantique
     st.subheader("📖 Tafsir extrait (selon le sens du verset)")
     cle, tafsir = trouver_tafsir_semantique(verset_sel['text'])
     st.write(tafsir)
 
-    # Traduction du tafsir
     langue_trad = st.selectbox("🌐 Traduire le tafsir en :", ["fr", "en", "ar", "wolof"], key="langue_tafsir")
     traduction_tafsir = traduire_texte(tafsir, langue_trad)
     st.markdown(f"**Traduction du tafsir en {langue_trad.upper()} :**")
     st.write(traduction_tafsir)
 
 except Exception as e:
-    st.error(f"Erreur lors du chargement du verset : {e}")
+    st.error(f"❌ Erreur lors de l'affichage du verset : {e}")
     st.stop()
 
 # Recherche sémantique
@@ -121,11 +133,14 @@ st.markdown("---")
 st.subheader("🔍 Recherche sémantique dans le Tafsir")
 requete = st.text_input("Entrez un mot-clé ou une question :")
 if requete:
-    req_embed = model.encode([requete], convert_to_tensor=True).cpu().numpy()
-    distances, indices = nn_model.kneighbors(req_embed)
-    for idx in indices[0]:
-        st.markdown(f"**🔹 {tafsir_keys[idx]}**")
-        st.write(textes_tafsir[idx])
+    try:
+        req_embed = model.encode([requete], convert_to_tensor=True).cpu().numpy()
+        distances, indices = nn_model.kneighbors(req_embed)
+        for idx in indices[0]:
+            st.markdown(f"**🔹 {tafsir_keys[idx]}**")
+            st.write(textes_tafsir[idx])
+    except Exception as e:
+        st.error(f"❌ Erreur dans la recherche sémantique : {e}")
 
 # Bloc Question-Réponse
 st.markdown("---")
