@@ -9,7 +9,7 @@ from sklearn.neighbors import NearestNeighbors
 # === Chargement du modèle sémantique ===
 model = SentenceTransformer("all-MiniLM-L6-v2")
 
-# === Chargement du fichier tafsir sq-saadi.json ===
+# === Chargement du fichier tafsir (sq-saadi.json) ===
 try:
     with open("sq-saadi.json", "r", encoding="utf-8") as f:
         tafsir_data = json.load(f)
@@ -22,9 +22,9 @@ textes_tafsir = []
 tafsir_keys = []
 for key, value in tafsir_data.items():
     if isinstance(value, dict):
-        tafsir_texte = value.get("es_tafsir", "").strip()
-        if tafsir_texte:
-            textes_tafsir.append(tafsir_texte)
+        tafsir_texte = value.get("es_tafsir", None)
+        if isinstance(tafsir_texte, str) and tafsir_texte.strip():
+            textes_tafsir.append(tafsir_texte.strip())
             tafsir_keys.append(key)
 
 if not textes_tafsir:
