@@ -3,6 +3,7 @@ import requests
 import json
 import numpy as np
 import os
+import re
 from sentence_transformers import SentenceTransformer
 from deep_translator import GoogleTranslator
 from sklearn.neighbors import NearestNeighbors
@@ -49,8 +50,10 @@ nn_model = NearestNeighbors(n_neighbors=3, metric='cosine')
 nn_model.fit(tafsir_embeddings_np)
 
 def nettoyer_html(texte):
-    import re
     return re.sub(r'<[^>]+>', '', texte)
+
+def supprimer_blocs_balises_bi(texte):
+    return re.sub(r'<b><i>.*?</i></b>', '', texte, flags=re.DOTALL)
 
 def traduire_texte(texte, langue_cible):
     try:
@@ -107,17 +110,15 @@ st.write(f"**{verset_sel['text']}**")
 st.subheader(f"🌍 Traduction ({traduction_label})")
 st.write(f"*{verset_trad['text']}*")
 
-# Affichage du tafsir exact par clé
+# Récupération du tafsir brut, nettoyage HTML + suppression bloc <b><i>
 cle_exacte = f"{num_sourate}:{verset_num}"
-tafsir = tafsir_data.get(cle_exacte, {}).get("text", "❌ Aucun tafsir disponible pour ce verset.")
+tafsir = tafsir_data.get(cle_exacte, {}).get("text", "")
+tafsir_sans_bi = supprimer_blocs_balises_bi(tafsir)
+tafsir_clean = nettoyer_html(tafsir_sans_bi)
 
-st.subheader("📖 Tafsir correspondant exactement au verset")
-st.markdown(f"🔹 **Clé : {cle_exacte}**")
-st.write(tafsir)
-
-# Traduction du tafsir
-langue_trad = st.selectbox("🌐 Traduire le tafsir en :", ["fr", "en", "ar", "es", "wolof"])
-tafsir_clean = nettoyer_html(tafsir)
+# 🔥 AFFICHAGE UNIQUEMENT DE LA TRADUCTION
+st.subheader("🌐 Traduire le tafsir")
+langue_trad = st.selectbox("Choisir la langue de traduction :", ["fr", "en", "ar", "es", "wolof"])
 traduction_tafsir = traduire_texte(tafsir_clean, langue_trad)
 st.markdown(f"**Traduction du tafsir en {langue_trad.upper()} :**")
 st.write(traduction_tafsir)
