@@ -2,92 +2,94 @@ import streamlit as st
 import requests
 import json
 import numpy as np
-from deep_translator import GoogleTranslator
-from sentence_transformers import SentenceTransformer, util
 from sklearn.metrics.pairwise import cosine_similarity
+from sklearn.neighbors import NearestNeighbors
+from sentence_transformers import SentenceTransformer
+from deep_translator import GoogleTranslator
 import joblib
 
-# 📁 Chargement des données
-with open("sq-saadi.json", "r", encoding="utf-8") as f:
-    tafsir_data = json.load(f)
-
-tafsir_keys = json.load(open("tafsir_keys.json", "r", encoding="utf-8"))
-embeddings = np.load("tafsir_embeddings.npy")
-index = joblib.load("tafsir_index_sklearn.joblib")
-
-# ⚙️ Initialisation du modèle d'embedding
-embedder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
-
-# 🌐 API URL
-QURAN_API_URL = "https://api.quran.com:443/v1"
-
-# 🌍 Choix de langue
-langue = st.selectbox("🌐 Choisissez la langue de traduction :", ["fr", "en", "es", "id", "tr"], index=0)
-
-# 📘 Récupérer toutes les sourates via A
+# Charger les données
 @st.cache_data
-def get_surahs():
-    url = "https://api.quran.com:443/v1/chapters"
-    try:
-        response = requests.get(url, timeout=10)
-        if response.status_code == 200:
-            data = response.json()
-            return data.get("chapters", [])
-        else:
-            st.error(f"Erreur API : {response.status_code} - {response.text}")
-            return []
-    except Exception as e:
-        st.error(f"Erreur lors de la récupération des sourates : {str(e)}")
-        return []
+def load_tafsir_data():
+    with open("sq-saadi.json", "r", encoding="utf-8") as f:
+        tafsir_data = json.load(f)
+    embeddings = np.load("tafsir_embeddings.npy")
+    with open("tafsir_keys.json", "r", encoding="utf-8") as f:
+        tafsir_keys = json.load(f)
+    index = joblib.load("tafsir_index_sklearn.joblib")
+    return tafsir_data, embeddings, tafsir_keys, index
 
+tafsir_data, tafsir_embeddings, tafsir_keys, tafsir_index = load_tafsir_data()
+model = SentenceTransformer('distiluse-base-multilingual-cased-v1')
 
-# 📌 Récupérer nombre de versets
+# Obtenir la liste des sourates
 @st.cache_data
-def get_verses_count(surah_id):
-    response = requests.get(f"{QURAN_API_URL}/chapters/{surah_id}")
-    return response.json()["chapter"]["verses_count"]
+def get_sourates():
+    url = "https://api.quran.com/v4/chapters"
+    response = requests.get(url)
+    return response.json()["chapters"]
 
-verse_count = get_verses_count(sourah_id)
-verse_number = st.slider("📌 Choisissez le numéro du verset :", 1, verse_count)
+sourates = get_sourates()
 
-# 📜 Récupérer verset et traduction
+# Obtenir les versets d'une sourate
 @st.cache_data
-def get_verse_and_translation(surah_id, verse_id, lang_code):
-    verse_res = requests.get(f"{QURAN_API_URL}/quran/verses/uthmani?chapter_number={surah_id}&verse_number={verse_id}")
-    translation_res = requests.get(f"{QURAN_API_URL}/quran/translations/33?chapter_number={surah_id}&verse_number={verse_id}")  # 33 = français Hamidullah
-    verse = verse_res.json()["verses"][0]["text_uthmani"]
-    translation = translation_res.json()["translations"][0]["text"]
-    return verse, translation
+def get_verses(sourah_id):
+    url = f"https://api.quran.com/v4/quran/verses/uthmani?chapter_number={sourah_id}"
+    response = requests.get(url)
+    return response.json()["verses"]
 
-# 📖 Affichage verset
-if st.button("Afficher le verset"):
-    verse_ar, translation = get_verse_and_translation(sourah_id, verse_number, langue)
-    st.markdown(f"### 🕋 Verset en arabe :")
-    st.markdown(f"<div style='font-size: 26px; direction: rtl;'>{verse_ar}</div>", unsafe_allow_html=True)
-    st.markdown("### 🌍 Traduction :")
-    st.success(translation)
+# Obtenir la traduction d’un verset
+@st.cache_data
+def get_translation(sourah_id, verse_number, lang="fr"):
+    url = f"https://api.quran.com/v4/quran/translations/33?chapter_number={sourah_id}"
+    response = requests.get(url)
+    translations = response.json()["translations"]
+    for t in translations:
+        if t["verse_key"] == f"{sourah_id}:{verse_number}":
+            return t["text"]
+    return "Traduction non disponible."
 
-# 📚 Afficher le tafsir traduit automatiquement
+# Interface principale
+st.title("📖 Assistant Coran IA")
+
+# Choix de langue pour la traduction automatique
+lang = st.selectbox("Choisissez la langue du tafsir :", ["fr", "en", "de", "es", "id"])
+
+# Sélection sourate
+sourah_name = st.selectbox("📚 Choisissez une sourate :", [s["name_arabic"] + f" ({s['name']})" for s in sourates])
+sourah_id = sourates[[s["name_arabic"] + f" ({s['name']})" for s in sourates].index(sourah_name)]["id"]
+
+verses = get_verses(sourah_id)
+verse_numbers = [v["verse_number"] for v in verses]
+verse_number = st.selectbox("📌 Choisissez le numéro du verset :", verse_numbers)
+
+# Affichage verset en arabe et traduction
+verse_ar = next((v["text_uthmani"] for v in verses if v["verse_number"] == verse_number), "")
+verse_trad = get_translation(sourah_id, verse_number)
+
+st.markdown(f"### 🕋 Verset en arabe\n{verse_ar}")
+st.markdown(f"### 🌐 Traduction ({lang})\n{verse_trad}")
+
+# Affichage tafsir traduit automatiquement
 tafsir_key = f"{sourah_id}:{verse_number}"
-tafsir_text = tafsir_data.get(tafsir_key, "Tafsir non disponible.")
-translated_tafsir = GoogleTranslator(source='auto', target=langue).translate(tafsir_text)
-st.markdown("### 📖 Tafsir As-Saadi (traduit automatiquement) :")
-st.info(translated_tafsir)
+tafsir_raw = tafsir_data.get(tafsir_key, "Tafsir non disponible.")
+tafsir_translated = GoogleTranslator(source='auto', target=lang).translate(tafsir_raw)
 
-# 🔍 Recherche sémantique dans le tafsir
+st.markdown(f"### 📘 Tafsir traduit ({lang})")
+st.info(tafsir_translated)
+
+# Recherche sémantique
 st.markdown("---")
-st.markdown("### 🔍 Recherche sémantique dans le tafsir As-Saadi")
-query = st.text_input("Entrez un mot ou une phrase pour rechercher dans le tafsir...")
+st.markdown("### 🔍 Recherche sémantique dans le Tafsir")
+query = st.text_input("Entrez une question ou un mot-clé…")
 
 if query:
-    query_embedding = embedder.encode(query)
-    similarities = cosine_similarity([query_embedding], embeddings)[0]
-    top_indices = similarities.argsort()[-5:][::-1]
-    
+    query_embedding = model.encode([query])
+    distances, indices = tafsir_index.kneighbors(query_embedding, n_neighbors=3)
     st.markdown("#### Résultats les plus pertinents :")
-    for idx in top_indices:
+    for i, idx in enumerate(indices[0]):
         key = tafsir_keys[idx]
-        tafsir = tafsir_data.get(key, "")
-        translated = GoogleTranslator(source='auto', target=langue).translate(tafsir)
-        st.markdown(f"✅ **Verset {key}** : {translated}")
-
+        tafsir_text = tafsir_data.get(key, "")
+        translated = GoogleTranslator(source='auto', target=lang).translate(tafsir_text)
+        st.markdown(f"**{i+1}. Verset {key}**")
+        st.success(translated)
