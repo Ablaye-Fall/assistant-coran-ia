@@ -1,76 +1,89 @@
 import streamlit as st
 import json
+import requests
 import numpy as np
 import joblib
-import requests
 from sentence_transformers import SentenceTransformer, util
 from deep_translator import GoogleTranslator
 
-# Chargement des données
-tafsir_data = json.load(open("sq-saadi.json", encoding="utf-8"))
-embeddings = np.load("tafsir_embeddings.npy")
-tafsir_keys = json.load(open("tafsir_keys.json", encoding="utf-8"))
-index = joblib.load("tafsir_index_sklearn.joblib")
+st.set_page_config(page_title="Assistant Coran IA", layout="wide")
+st.title("📖 Assistant Coran IA")
 
+# -------------------- Chargement des données --------------------
+
+@st.cache_data
+
+def load_tafsir():
+    with open("sq-saadi.json", "r", encoding="utf-8") as f:
+        return json.load(f)
+
+tafsir_data = load_tafsir()
+embeddings = np.load("tafsir_embeddings.npy")
+index = joblib.load("tafsir_index_sklearn.joblib")
 model = SentenceTransformer("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
 
-# API pour récupérer les versets et l'audio
-QURAN_API_URL = "https://api.alquran.cloud/v1/ayah/"
+# -------------------- Sélection sourate et verset --------------------
 
-def get_ayah(surah: int, ayah: int, translation: str = "fr.hamidullah"):
-    res = requests.get(f"{QURAN_API_URL}{surah}:{ayah}/{translation}")
-    if res.status_code == 200:
-        data = res.json()
-        return data["data"]
-    return None
+response = requests.get("https://api.quran.com/v4/chapters")
+surahs = response.json()["data"]
+surah_names = [f"{s['id']:>3} - {s['name_arabic']} ({s['name_simple']})" for s in surahs]
+selected_surah = st.selectbox("📚 Choisissez une sourate :", surah_names)
+surah_id = int(selected_surah.split(" - ")[0])
 
-def get_tafsir(surah: int, ayah: int):
-    key = f"{surah}:{ayah}"
-    return tafsir_data.get(key, "Tafsir non disponible.")
+verse_num = st.number_input("📌 Choisissez le numéro du verset :", min_value=1, value=1, step=1)
 
-def semantic_search(query: str, top_k=3):
-    query_embedding = model.encode([query])[0]
-    D, I = index.kneighbors([query_embedding], n_neighbors=top_k)
-    results = []
-    for idx in I[0]:
-        key = tafsir_keys[idx]
-        tafsir_text = tafsir_data.get(key, "Tafsir introuvable.")
-        results.append((key, tafsir_text))
-    return results
+# -------------------- Choix des langues --------------------
 
-def play_audio(audio_url):
-    st.audio(audio_url, format='audio/mp3')
+langue_verset = st.selectbox("🌐 Traduction du verset :", ["fr", "en"])
+langue_tafsir = st.selectbox("🧠 Langue de traduction du tafsir :", ["fr", "en", "ar", "id"])
 
-# Interface Streamlit
-st.title("🕌 Assistant Coran IA")
+# -------------------- Affichage du verset + audio --------------------
 
-# Choix de la sourate et du verset
-surah_number = st.number_input("📖 Numéro de la sourate", min_value=1, max_value=114, value=1)
-verse_number = st.number_input("📌 Numéro du verset", min_value=1, value=1)
+verset_url = f"https://api.quran.com/v4/quran/verses/{langue_verset}?chapter_number={surah_id}&verse_number={verse_num}"
+verse_data = requests.get(verset_url).json()
+arabic = verse_data['data']['verses'][0]['text_uthmani']
+traduction = verse_data['data']['verses'][0]['translations'][0]['text'] if 'translations' in verse_data['data']['verses'][0] else ""
 
-# Choix de la langue de traduction
-langue = st.selectbox("🌐 Choisir la langue de traduction", ["fr.hamidullah", "en.sahih", "ar.alafasy"])
+st.markdown("### 🕋 Verset en arabe")
+st.markdown(f"<div style='font-size:28px; direction:rtl;'>{arabic}</div>", unsafe_allow_html=True)
 
-if st.button("Afficher le verset et le tafsir"):
-    ayah_data = get_ayah(surah=surah_number, ayah=verse_number, translation=langue)
+st.markdown("### 🌍 Traduction du verset")
+st.markdown(f"{traduction}")
 
-    if ayah_data:
-        st.markdown(f"### 🕋 Verset en arabe\n{ayah_data['text']}")
-        st.markdown(f"### 🌍 Traduction\n{ayah_data['edition']['name']}:\n> {ayah_data['text']}")
+# Audio
+recitation_url = f"https://verses.quran.com/{surah_id:03d}{verse_num:03d}.mp3"
+st.audio(recitation_url)
 
-        tafsir_text = get_tafsir(surah=surah_number, ayah=verse_number)
-        st.markdown(f"### 📚 Tafsir (Saadi)\n{tafsir_text}")
+# -------------------- Affichage du tafsir traduit --------------------
 
-        if 'audio' in ayah_data:
-            st.markdown("### 🔊 Audio du verset")
-            play_audio(ayah_data['audio'])
-    else:
-        st.error("❌ Verset non trouvé via l'API Quran.")
+key = f"{surah_id}:{verse_num}"
+tafsir_original = tafsir_data.get(key, "Aucun tafsir trouvé.")
+tafsir_translated = GoogleTranslator(source="auto", target=langue_tafsir).translate(tafsir_original)
+
+st.markdown("### 🧠 Tafsir traduit")
+st.markdown(tafsir_translated)
+
+# -------------------- Recherche sémantique --------------------
 
 st.markdown("---")
-st.markdown("### 🔍 Recherche sémantique dans le tafsir")
-query = st.text_input("Entrez une question ou un mot-clé")
-if st.button("Rechercher") and query:
-    results = semantic_search(query)
-    for key, tafsir in results:
-        st.markdown(f"**{key}**: {tafsir}")
+st.markdown("## 🔍 Recherche sémantique dans le tafsir")
+query = st.text_input("Entrez un mot ou une question (en français, anglais, etc.)")
+
+if query:
+    query_embedding = model.encode(query, convert_to_tensor=True)
+    scores = util.cos_sim(query_embedding, embeddings)[0]
+    top_k = np.argsort(-scores)[:3]
+
+    st.markdown("### Résultats les plus pertinents :")
+    for idx in top_k:
+        key = list(tafsir_data.keys())[idx]
+        s_id, v_id = key.split(":")
+        s_id, v_id = int(s_id), int(v_id)
+        verse_ar = requests.get(f"https://api.quran.com/v4/quran/verses/ar?chapter_number={s_id}&verse_number={v_id}").json()['data']['verses'][0]['text_uthmani']
+        tafsir_text = tafsir_data[key]
+        tafsir_trans = GoogleTranslator(source="auto", target=langue_tafsir).translate(tafsir_text)
+
+        st.markdown(f"**{s_id}:{v_id}**")
+        st.markdown(f"<div style='direction:rtl; font-size:20px'>{verse_ar}</div>", unsafe_allow_html=True)
+        st.markdown(f"{tafsir_trans}")
+        st.markdown("---")
