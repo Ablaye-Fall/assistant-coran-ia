@@ -19,7 +19,7 @@ index = joblib.load("tafsir_index_sklearn.joblib")
 embedder = SentenceTransformer("sentence-transformers/all-MiniLM-L6-v2")
 
 # 🌐 API URL
-QURAN_API_URL = "https://api.quran.com:443/v4"
+QURAN_API_URL = "https://api.quran.com:443/v1"
 
 # 🌍 Choix de langue
 langue = st.selectbox("🌐 Choisissez la langue de traduction :", ["fr", "en", "es", "id", "tr"], index=0)
