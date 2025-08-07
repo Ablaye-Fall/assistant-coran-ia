@@ -24,16 +24,22 @@ QURAN_API_URL = "https://api.quran.com:443/v1"
 # 🌍 Choix de langue
 langue = st.selectbox("🌐 Choisissez la langue de traduction :", ["fr", "en", "es", "id", "tr"], index=0)
 
-# 📘 Récupérer toutes les sourates via API
+# 📘 Récupérer toutes les sourates via A
 @st.cache_data
 def get_surahs():
-    response = requests.get(f"{QURAN_API_URL}/chapters")
-    return response.json()["chapters"]
+    url = "https://api.quran.com:443/v1/chapters"
+    try:
+        response = requests.get(url, timeout=10)
+        if response.status_code == 200:
+            data = response.json()
+            return data.get("chapters", [])
+        else:
+            st.error(f"Erreur API : {response.status_code} - {response.text}")
+            return []
+    except Exception as e:
+        st.error(f"Erreur lors de la récupération des sourates : {str(e)}")
+        return []
 
-surahs = get_surahs()
-sourah_names = [f"{s['id']}. {s['name_arabic']} ({s['name_simple']})" for s in surahs]
-selected_sourah = st.selectbox("📖 Choisissez une sourate :", sourah_names)
-sourah_id = int(selected_sourah.split(".")[0])
 
 # 📌 Récupérer nombre de versets
 @st.cache_data
