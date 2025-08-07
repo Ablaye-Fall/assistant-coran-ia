@@ -6,6 +6,7 @@ import os
 from sentence_transformers import SentenceTransformer
 from deep_translator import GoogleTranslator
 from sklearn.neighbors import NearestNeighbors
+import re
 
 # === Mise en cache du modèle ===
 @st.cache_resource
@@ -49,7 +50,6 @@ nn_model = NearestNeighbors(n_neighbors=3, metric='cosine')
 nn_model.fit(tafsir_embeddings_np)
 
 def nettoyer_html(texte):
-    import re
     return re.sub(r'<[^>]+>', '', texte)
 
 def traduire_texte(texte, langue_cible):
@@ -71,7 +71,7 @@ def obtenir_vers(surah_number, translation_code="en.asad"):
 
 # === Interface utilisateur ===
 st.set_page_config(page_title="Assistant Coran IA", layout="centered")
-st.title("📖 Assistant Coran avec IA ")
+st.title("📖 Assistant Coran avec IA (Tafsir As-Saadi - sq-saadi.json)")
 
 # Choix de la sourate
 sourates = obtenir_la_liste_des_surahs()
@@ -110,7 +110,6 @@ st.write(f"*{verset_trad['text']}*")
 # Affichage du tafsir exact par clé
 cle_exacte = f"{num_sourate}:{verset_num}"
 tafsir = tafsir_data.get(cle_exacte, {}).get("text", "❌ Aucun tafsir disponible pour ce verset.")
-
 tafsir_clean = nettoyer_html(tafsir)
 
 st.subheader("📖 Tafsir du verset")
@@ -126,5 +125,25 @@ st.write(traduction_tafsir)
 st.markdown("---")
 st.subheader("❓ Posez une question sur un verset ou tafsir")
 question = st.text_input("Votre question :")
+
 if question:
-    st.info("🔧 Réponse automatique à venir (modèle local ou GPT).")
+    st.info("🔍 Recherche de la réponse la plus proche dans le tafsir...")
+
+    # Encodage de la question
+    question_embedding = model.encode([question], convert_to_tensor=True).cpu().numpy()
+
+    # Recherche des réponses les plus proches
+    distances, indices = nn_model.kneighbors(question_embedding, n_neighbors=3)
+
+    st.markdown("### 🧠 Réponses suggérées à partir du Tafsir As-Saadi :")
+
+    for i, idx in enumerate(indices[0]):
+        key = tafsir_keys[idx]
+        texte = nettoyer_html(tafsir_data.get(key, {}).get("text", ""))
+        st.markdown(f"**Résultat {i+1} — Verset {key} :**")
+        st.write(texte)
+
+        if langue_trad:
+            traduction = traduire_texte(texte, langue_trad)
+            st.markdown(f"🔁 *Traduction en {langue_trad.upper()}* :")
+            st.write(traduction)
