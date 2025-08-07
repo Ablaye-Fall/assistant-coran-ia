@@ -1,33 +1,36 @@
 import json
 import numpy as np
 from sentence_transformers import SentenceTransformer
+from sklearn.neighbors import NearestNeighbors
+import joblib
 
-# Charger le fichier tafsir
+# === 1. Charger le fichier sq-saadi.json ===
 with open("sq-saadi.json", "r", encoding="utf-8") as f:
     tafsir_data = json.load(f)
 
-# Extraire les textes
-tafsir_keys = []
-tafsir_texts = []
+# === 2. Initialiser le modèle d'embedding léger ===
+model = SentenceTransformer("paraphrase-MiniLM-L6-v2")
 
-for key, value in tafsir_data.items():
-    if isinstance(value, dict):
-        text = value.get("text", "").strip()
-        if text:
-            tafsir_keys.append(key)
-            tafsir_texts.append(text)
+# === 3. Préparer les textes et les clés ===
+keys = list(tafsir_data.keys())  # ex: ['1:1', '1:2', ...]
+texts = [tafsir_data[key] for key in keys]
 
-print(f"Nombre de tafsir encodés : {len(tafsir_texts)}")
+# === 4. Générer les embeddings ===
+print("🔄 Génération des embeddings...")
+embeddings = model.encode(texts, show_progress_bar=True)
 
-# Encoder avec le modèle
-model = SentenceTransformer("all-MiniLM-L6-v2")
-embeddings = model.encode(tafsir_texts, convert_to_numpy=True)
-
-# Sauvegarder les fichiers
+# === 5. Sauvegarder les fichiers ===
 np.save("tafsir_embeddings.npy", embeddings)
-
 with open("tafsir_keys.json", "w", encoding="utf-8") as f:
-    json.dump(tafsir_keys, f, ensure_ascii=False, indent=2)
+    json.dump(keys, f, ensure_ascii=False)
 
-print("✅ Embeddings enregistrés dans 'tafsir_embeddings.npy'")
-print("✅ Clés enregistrées dans 'tafsir_keys.json'")
+# === 6. Créer l’index avec NearestNeighbors ===
+print("📦 Création de l’index sklearn...")
+nn_index = NearestNeighbors(n_neighbors=5, metric="cosine")
+nn_index.fit(embeddings)
+
+# Sauvegarder l’index avec joblib
+joblib.dump(nn_index, "tafsir_index_sklearn.joblib")
+
+print("✅ Fichiers générés avec succès (sans faiss).")
+
