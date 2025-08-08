@@ -7,7 +7,8 @@ import tempfile
 from deep_translator import GoogleTranslator
 from sentence_transformers import SentenceTransformer
 from sklearn.neighbors import NearestNeighbors
-from langdetect import detect
+from langdetect import detect, DetectorFactory
+from transformers import pipeline
 from gtts import gTTS
 
 # Fonction de détection de langue
@@ -164,26 +165,34 @@ question = st.text_input("Entrez votre question :")
 if question:
     langue_detectee = detect_language(question)
 
-    # Traduire la question en albanais (langue du tafsir) si besoin
-    if langue_detectee != "sq":
-        question_albanais = traduire_texte(question, "sq")
-    else:
-        question_albanais = question
+    # Recherche vectorielle dans tafsir albanais (question non traduite)
+    query_embed = model.encode([question], convert_to_numpy=True)
+    distances, indices = nn_model.kneighbors(query_embed, n_neighbors=5)
 
-    # Recherche vectorielle dans le tafsir albanais
-    query_embed = model.encode([question_albanais], convert_to_numpy=True)
-    distances, indices = nn_model.kneighbors(query_embed)
-
-    st.markdown("### 📌 Résultats similaires dans le tafsir :")
+    candidates = []
     for idx in indices[0]:
         cle = tafsir_keys[idx]
-        texte_albanais = nettoyer_html(tafsir_data[cle]["text"])
+        contexte_albanais = nettoyer_html(tafsir_data[cle]["text"])
 
-        # Traduire le tafsir extrait dans la langue de la question
-        if langue_detectee != "sq":
-            texte_traduit = traduire_texte(texte_albanais, langue_detectee)
-        else:
-            texte_traduit = texte_albanais
+        try:
+            qa_result = qa_model(question=question, context=contexte_albanais)
+            reponse = qa_result["answer"]
+            score = qa_result["score"]
+            candidates.append((reponse, score, cle))
+        except Exception:
+            continue
 
-        st.markdown(f"**{cle}**")
-        st.write(texte_traduit)
+    candidates = sorted(candidates, key=lambda x: x[1], reverse=True)
+
+    if candidates:
+        st.markdown("### 💡 Réponse(s) extraites :")
+        for i, (reponse, score, cle) in enumerate(candidates):
+            if langue_detectee != "sq":
+                reponse_trad = traduire_texte(reponse, langue_detectee)
+            else:
+                reponse_trad = reponse
+
+            st.markdown(f"**Réponse {i+1} (score: {score:.2f}, source: {cle}) :**")
+            st.write(reponse_trad)
+    else:
+        st.warning("Aucune réponse précise trouvée.")
