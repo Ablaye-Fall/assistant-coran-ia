@@ -10,6 +10,15 @@ from sklearn.neighbors import NearestNeighbors
 from langdetect import detect
 from gtts import gTTS
 
+# Fix pour stabilité de la détection de langue
+DetectorFactory.seed = 0
+
+# Fonction de détection de langue
+def detect_language(text):
+    try:
+        return detect(text)
+    except:
+        return "unknown"
 
 # Chargement des ressources encodées
 @st.cache_resource
