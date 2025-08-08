@@ -184,46 +184,47 @@ st.markdown("---")
 st.subheader("❓ Pose ta question (arabe/français/anglais)")
 
 question = st.text_input("Entrez votre question :")
-
 if question:
     question_clean = question.strip()
-    langue_detectee = detect_language(question_clean)
-    st.write(f"Langue détectée : {langue_detectee}")
+    langue_question = detect_language(question_clean)
+    st.write(f"Langue détectée : {langue_question}")
 
-    question_albanais = translate_to_albanian(question_clean, langue_detectee)
+    # Traduction question vers albanais (langue du tafsir)
+    question_albanais = translate_text(question_clean, langue_question, "sq")
     st.write(f"Question traduite en albanais : {question_albanais}")
 
-    if question_albanais:
-        query_embed = model.encode([question_albanais])
-        query_embed = np.array(query_embed)
+    # Recherche des passages proches dans le tafsir albanais
+    q_embed = sentence_model.encode([question_albanais])
+    q_embed = np.array(q_embed)
 
-        distances, indices = nn_model.kneighbors(query_embed, n_neighbors=5)
+    distances, indices = nn_model.kneighbors(q_embed, n_neighbors=5)
 
-        candidats = []
-        for idx in indices[0]:
-            cle = tafsir_keys[idx]
-            contexte_brut = tafsir_data.get(cle, {}).get("text", "")
-            contexte = nettoyer_html(contexte_brut)
+    candidats = []
+    for idx in indices[0]:
+        key = tafsir_keys[idx]
+        contexte_brut = tafsir_data.get(key, {}).get("text", "")
+        contexte = nettoyer_html(contexte_brut)
 
-            if not contexte:
-                st.warning(f"Contexte vide pour la clé {cle}, passage ignoré.")
-                continue
+        if not contexte:
+            st.warning(f"Contexte vide pour la clé {key}, passage ignoré.")
+            continue
 
-            try:
-                result = qa_model(question=question_albanais, context=contexte)
-                candidats.append((result["answer"], result["score"], cle))
-            except Exception as e:
-                st.error(f"Erreur QA sur contexte {cle} : {e}")
-                continue
+        try:
+            result = qa_model(question=question_albanais, context=contexte)
+            candidats.append((result["answer"], result["score"], key))
+        except Exception as e:
+            st.error(f"Erreur QA sur contexte {key} : {e}")
+            continue
 
-        candidats = sorted(candidats, key=lambda x: x[1], reverse=True)
+    candidats = sorted(candidats, key=lambda x: x[1], reverse=True)
 
-        if candidats:
-            st.markdown("### Réponses proposées :")
-            for i, (rep, score, cle) in enumerate(candidats, start=1):
-                st.markdown(f"**Réponse {i}** (score: {score:.2f}, source: {cle})")
-                st.write(rep)
-        else:
-            st.warning("Aucune réponse trouvée pour cette question.")
+    if candidats:
+        st.markdown("### Réponses proposées :")
+        for i, (rep, score, key) in enumerate(candidats, start=1):
+            # Traduire réponse QA vers la langue de la question
+            rep_trad = translate_text(rep, "sq", langue_question)
+            st.markdown(f"**Réponse {i}** (score: {score:.2f}, source: {key})")
+            st.write(rep_trad)
     else:
-        st.warning("La traduction a échoué, veuillez reformuler la question.")
+        st.warning("Aucune réponse trouvée pour cette question.")
+
