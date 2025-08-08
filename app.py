@@ -160,21 +160,28 @@ st.subheader("❓ Question sur un verset ou tafsir")
 
 question = st.text_input("Entrez votre question :")
 if question:
-    langue_question = detect_language(question)
+    langue_detectee = detect_language(question)
 
-    # Traduire la question vers l'albanais (langue du tafsir)
-    if langue_question != 'sq':
-        question_albanais = traduire_texte(question, 'sq')
+    # Traduire la question en albanais (langue du tafsir) si besoin
+    if langue_detectee != "sq":
+        question_albanais = traduire_texte(question, "sq")
     else:
         question_albanais = question
 
-    # Encodage & recherche
+    # Recherche vectorielle dans le tafsir albanais
     query_embed = model.encode([question_albanais], convert_to_numpy=True)
     distances, indices = nn_model.kneighbors(query_embed)
 
     st.markdown("### 📌 Résultats similaires dans le tafsir :")
     for idx in indices[0]:
         cle = tafsir_keys[idx]
-        texte = nettoyer_html(supprimer_blocs_balises_bi(tafsir_data[cle]["text"]))
+        texte_albanais = nettoyer_html(tafsir_data[cle]["text"])
+
+        # Traduire le tafsir extrait dans la langue de la question
+        if langue_detectee != "sq":
+            texte_traduit = traduire_texte(texte_albanais, langue_detectee)
+        else:
+            texte_traduit = texte_albanais
+
         st.markdown(f"**{cle}**")
-        st.write(texte)
+        st.write(texte_traduit)
