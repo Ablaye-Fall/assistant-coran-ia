@@ -3,10 +3,13 @@ import json
 import numpy as np
 import requests
 import re
+import tempfile
 from deep_translator import GoogleTranslator
 from sentence_transformers import SentenceTransformer
 from sklearn.neighbors import NearestNeighbors
-from langdetect import detect, DetectorFactory
+from langdetect import detect
+from gtts import gTTS
+
 
 # Chargement des ressources encodées
 @st.cache_resource
@@ -133,6 +136,17 @@ langue_trad = st.selectbox("Choisir la langue de traduction :", ["fr", "en", "ar
 traduction_tafsir = traduire_texte(tafsir_clean, langue_trad)
 st.markdown(f"**Traduction du tafsir en {langue_trad.upper()} :**")
 st.write(traduction_tafsir)
+
+# Audio du tafsir traduit
+if traduction_tafsir:
+    try:
+        tts = gTTS(traduction_tafsir, lang=langue_trad)
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+        tts.save(temp_file.name)
+        st.subheader("🔊 Écouter le tafsir traduit")
+        st.audio(temp_file.name, format="audio/mp3")
+    except Exception as e:
+        st.warning(f"Audio non disponible : {e}")
 
 # ----------------- Q&A -----------------
 st.markdown("---")
