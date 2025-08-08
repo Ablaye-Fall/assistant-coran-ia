@@ -34,7 +34,11 @@ tafsir_data, tafsir_keys, tafsir_embeddings_np = load_resources()
 
 @st.cache_resource
 def load_sentence_model():
+model = load_sentence_model() 
     return SentenceTransformer("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
+model = load_model()
+
+st.write("Type model:", type(model))
 
 @st.cache_resource(show_spinner=False)
 def load_qa_model():
