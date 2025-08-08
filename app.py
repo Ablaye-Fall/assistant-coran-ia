@@ -8,7 +8,6 @@ from deep_translator import GoogleTranslator
 from sentence_transformers import SentenceTransformer
 from sklearn.neighbors import NearestNeighbors
 from langdetect import detect, DetectorFactory
-from googletrans import Translator
 from transformers import pipeline
 from gtts import gTTS
 
@@ -47,9 +46,6 @@ def load_qa_model():
 
 qa_model = load_qa_model()
 
-# Initialisation traducteur
-translator = Translator()
-
 # Fonction détection langue
 def detect_language(text):
     try:
@@ -59,15 +55,13 @@ def detect_language(text):
 
 # Fonction traduction vers albanais
 def translate_to_albanian(text, src_lang):
-    if src_lang == "sq":  # si déjà albanais
+    if src_lang == "sq":
         return text
     try:
-        translated = translator.translate(text, src="auto", dest="sq")
-        return translated.text
+        return GoogleTranslator(source='auto', target='sq').translate(text)
     except Exception as e:
         st.warning(f"Erreur traduction : {e}")
         return text
-
 
 # Construire l’index
 nn_model = NearestNeighbors(n_neighbors=3, metric='cosine')
