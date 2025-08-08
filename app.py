@@ -166,35 +166,33 @@ question = st.text_input("Entrez votre question :")
 if question:
     langue_detectee = detect_language(question)
 
-    # Recherche vectorielle dans tafsir albanais (question non traduite)
-    query_embed = model.encode([question], convert_to_tensor=False)
+    # Encode la question
+    query_embed = model.encode([question])
     query_embed = np.array(query_embed)
+
+    # Recherche les contextes les plus proches
     distances, indices = nn_model.kneighbors(query_embed, n_neighbors=5)
 
-    candidates = []
+    candidats = []
     for idx in indices[0]:
         cle = tafsir_keys[idx]
-        contexte_albanais = nettoyer_html(tafsir_data[cle]["text"])
-
+        contexte = nettoyer_html(tafsir_data[cle]["text"])
         try:
-            qa_result = qa_model(question=question, context=contexte_albanais)
-            reponse = qa_result["answer"]
-            score = qa_result["score"]
-            candidates.append((reponse, score, cle))
-        except Exception:
+            result = qa_model(question=question, context=contexte)
+            candidats.append((result["answer"], result["score"], cle))
+        except Exception as e:
+            st.write(f"Erreur QA sur contexte {cle} : {e}")
             continue
 
-    candidates = sorted(candidates, key=lambda x: x[1], reverse=True)
+    # Trie les réponses par score
+    candidats = sorted(candidats, key=lambda x: x[1], reverse=True)
 
-    if candidates:
-        st.markdown("### 💡 Réponse(s) extraites :")
-        for i, (reponse, score, cle) in enumerate(candidates):
-            if langue_detectee != "sq":
-                reponse_trad = traduire_texte(reponse, langue_detectee)
-            else:
-                reponse_trad = reponse
-
-            st.markdown(f"**Réponse {i+1} (score: {score:.2f}, source: {cle}) :**")
-            st.write(reponse_trad)
+    if candidats:
+        st.markdown("### Réponses proposées :")
+        for i, (rep, score, cle) in enumerate(candidats):
+            st.write(f"**Réponse {i+1} (score {score:.2f}) source: {cle}**")
+            st.write(rep)
     else:
-        st.warning("Aucune réponse précise trouvée.")
+        st.warning("Aucune réponse trouvée.")
+
+
