@@ -37,9 +37,6 @@ def load_sentence_model():
     model = SentenceTransformer("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
     return model
 
-
-st.write("Type model:", type(model))
-
 @st.cache_resource(show_spinner=False)
 def load_qa_model():
     model_name = "mrm8488/bert-multi-cased-finetuned-xquadv1"
