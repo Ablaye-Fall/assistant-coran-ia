@@ -11,6 +11,7 @@ from langdetect import detect, DetectorFactory
 from transformers import pipeline
 from gtts import gTTS
 
+DetectorFactory.seed = 0  # Pour stabilité détection langue
 # Fonction de détection de langue
 def detect_language(text):
     try:
@@ -39,10 +40,33 @@ def load_sentence_model():
 # Ensuite, appelle-la pour charger le modèle
 model = load_sentence_model()
 
-@st.cache_resource(show_spinner=False)
+@st.cache_resource
 def load_qa_model():
-    model_name = "mrm8488/bert-multi-cased-finetuned-xquadv1"
-    return pipeline("question-answering", model=model_name, tokenizer=model_name)
+    return pipeline("question-answering", model="distilbert-base-uncased-distilled-squad")
+
+qa_model = load_qa_model()
+
+# Initialisation traducteur
+translator = Translator()
+
+# Fonction détection langue
+def detect_language(text):
+    try:
+        return detect(text)
+    except:
+        return "unknown"
+
+# Fonction traduction vers albanais
+def translate_to_albanian(text, src_lang):
+    if src_lang == "sq":  # si déjà albanais
+        return text
+    try:
+        translated = translator.translate(text, src="auto", dest="sq")
+        return translated.text
+    except Exception as e:
+        st.warning(f"Erreur traduction : {e}")
+        return text
+
 
 # Construire l’index
 nn_model = NearestNeighbors(n_neighbors=3, metric='cosine')
@@ -162,39 +186,49 @@ if traduction_tafsir:
 
 # ----------------- Q&A -----------------
 st.markdown("---")
-st.subheader("❓ Question sur un verset ou tafsir")
-qa_model = pipeline("question-answering", model="distilbert-base-uncased-distilled-squad")
+st.subheader("❓ Pose ta question (arabe/français/anglais)")
+
 question = st.text_input("Entrez votre question :")
+
 if question:
-    langue_detectee = detect_language(question)
+    question_clean = question.strip()
+    langue_detectee = detect_language(question_clean)
+    st.write(f"Langue détectée : {langue_detectee}")
 
-    # Encode la question
-    query_embed = model.encode([question])
-    query_embed = np.array(query_embed)
+    question_albanais = translate_to_albanian(question_clean, langue_detectee)
+    st.write(f"Question traduite en albanais : {question_albanais}")
 
-    # Recherche les contextes les plus proches
-    distances, indices = nn_model.kneighbors(query_embed, n_neighbors=5)
+    if question_albanais:
+        query_embed = model.encode([question_albanais])
+        query_embed = np.array(query_embed)
 
-    candidats = []
-    for idx in indices[0]:
-        cle = tafsir_keys[idx]
-        contexte = nettoyer_html(tafsir_data[cle]["text"])
-        try:
-            result = qa_model(question=question, context=contexte)
-            candidats.append((result["answer"], result["score"], cle))
-        except Exception as e:
-            st.write(f"Erreur QA sur contexte {cle} : {e}")
-            continue
+        distances, indices = nn_model.kneighbors(query_embed, n_neighbors=5)
 
-    # Trie les réponses par score
-    candidats = sorted(candidats, key=lambda x: x[1], reverse=True)
+        candidats = []
+        for idx in indices[0]:
+            cle = tafsir_keys[idx]
+            contexte_brut = tafsir_data.get(cle, {}).get("text", "")
+            contexte = nettoyer_html(contexte_brut)
 
-    if candidats:
-        st.markdown("### Réponses proposées :")
-        for i, (rep, score, cle) in enumerate(candidats):
-            st.write(f"**Réponse {i+1} (score {score:.2f}) source: {cle}**")
-            st.write(rep)
+            if not contexte:
+                st.warning(f"Contexte vide pour la clé {cle}, passage ignoré.")
+                continue
+
+            try:
+                result = qa_model(question=question_albanais, context=contexte)
+                candidats.append((result["answer"], result["score"], cle))
+            except Exception as e:
+                st.error(f"Erreur QA sur contexte {cle} : {e}")
+                continue
+
+        candidats = sorted(candidats, key=lambda x: x[1], reverse=True)
+
+        if candidats:
+            st.markdown("### Réponses proposées :")
+            for i, (rep, score, cle) in enumerate(candidats, start=1):
+                st.markdown(f"**Réponse {i}** (score: {score:.2f}, source: {cle})")
+                st.write(rep)
+        else:
+            st.warning("Aucune réponse trouvée pour cette question.")
     else:
-        st.warning("Aucune réponse trouvée.")
-
-
+        st.warning("La traduction a échoué, veuillez reformuler la question.")
