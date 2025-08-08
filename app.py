@@ -163,7 +163,7 @@ if traduction_tafsir:
 # ----------------- Q&A -----------------
 st.markdown("---")
 st.subheader("❓ Question sur un verset ou tafsir")
-
+qa_model = pipeline("question-answering", model="distilbert-base-uncased-distilled-squad")
 question = st.text_input("Entrez votre question :")
 if question:
     langue_detectee = detect_language(question)
