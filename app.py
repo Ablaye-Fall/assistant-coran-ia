@@ -35,11 +35,14 @@ nn_model.fit(tafsir_embeddings_np)
 def nettoyer_html(texte):
     return re.sub(r'<[^>]+>', '', texte)
 
+def supprimer_blocs_balises_bi(texte):
+    return re.sub(r'<b><i>.*?</i></b>', '', texte, flags=re.DOTALL)
+
 def traduire_texte(texte, langue_cible):
     try:
         return GoogleTranslator(source='auto', target=langue_cible).translate(texte)
     except Exception as e:
-        return f"Erreur traduction : {e}"
+        return f"Erreur de traduction : {e}"
 
 @st.cache_data(ttl=86400)
 def obtenir_la_liste_des_surahs():
@@ -62,6 +65,10 @@ num_sourate = int(choix_sourate.split(".")[0])
 traduction_options = {
     "🇫🇷 Français (Hamidullah)": "fr.hamidullah",
     "🇬🇧 Anglais (Muhammad Asad)": "en.asad",
+    "🇮🇩 Indonésien": "id.indonesian",
+    "🇹🇷 Turc": "tr.translator",
+    "🇺🇿 Ouzbek": "uz.sodik"
+
 }
 traduction_label = st.selectbox("🌐 Traduction :", list(traduction_options.keys()))
 code_traduction = traduction_options[traduction_label]
@@ -74,26 +81,31 @@ verset_num = st.number_input("📌 Choisir le verset :", 1, len(versets_ar), 1)
 verset_sel = versets_ar[verset_num - 1]
 verset_trad = versets_trad[verset_num - 1]
 
+# Option de zoom
+zoom = st.slider("🔍 Zoom du verset", min_value=1.0, max_value=3.0, value=1.5, step=0.1)
+
+# Affichage avec zoom
 st.subheader("🕋 Verset en arabe")
-st.write(f"**{verset_sel['text']}**")
+st.markdown(
+    f"<p style='font-size:{zoom}em; direction:rtl; text-align:right;'>"
+    f"**{verset_sel['text']}**</p>",
+    unsafe_allow_html=True
+)
 
 st.subheader(f"🌍 Traduction ({traduction_label})")
 st.write(f"*{verset_trad['text']}*")
 
 cle_exacte = f"{num_sourate}:{verset_num}"
-tafsir = tafsir_data.get(cle_exacte, {}).get("text", None)
+tafsir = tafsir_data.get(cle_exacte, {}).get("text", "")
+tafsir_sans_bi = supprimer_blocs_balises_bi(tafsir)
+tafsir_clean = nettoyer_html(tafsir_sans_bi)
 
-if tafsir:
-    tafsir_clean = nettoyer_html(tafsir)
-    st.subheader("📖 Tafsir du verset")
-    st.write(tafsir_clean)
-
-    langue_trad = st.selectbox("🌐 Traduire le tafsir en :", ["fr", "en", "ar", "es"])
-    trad = traduire_texte(tafsir_clean, langue_trad)
-    st.markdown(f"**Traduction du tafsir en {langue_trad.upper()} :**")
-    st.write(trad)
-else:
-    st.warning("❌ Aucun tafsir trouvé pour ce verset.")
+# 🔥 AFFICHAGE UNIQUEMENT DE LA TRADUCTION
+st.subheader("🌐 Traduire le tafsir")
+langue_trad = st.selectbox("Choisir la langue de traduction :", ["fr", "en", "ar", "es", "wolof"])
+traduction_tafsir = traduire_texte(tafsir_clean, langue_trad)
+st.markdown(f"**Traduction du tafsir en {langue_trad.upper()} :**")
+st.write(traduction_tafsir)
 
 # Q&A locale
 st.markdown("---")
