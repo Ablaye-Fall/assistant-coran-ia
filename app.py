@@ -6,6 +6,7 @@ import re
 from deep_translator import GoogleTranslator
 from sentence_transformers import SentenceTransformer
 from sklearn.neighbors import NearestNeighbors
+from langdetect import detect, DetectorFactory
 
 # Chargement des ressources encodées
 @st.cache_resource
@@ -21,10 +22,10 @@ def load_resources():
 
 tafsir_data, tafsir_keys, tafsir_embeddings_np = load_resources()
 
-# Charger le modèle uniquement pour Q&A
 @st.cache_resource
 def load_model():
-    return SentenceTransformer("all-MiniLM-L6-v2")
+    # Modèle multilingue pour meilleure couverture
+    return SentenceTransformer("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
 
 model = load_model()
 
@@ -52,6 +53,16 @@ def obtenir_la_liste_des_surahs():
 def obtenir_vers(surah_number, translation_code="en.asad"):
     url = f"http://api.alquran.cloud/v1/surah/{surah_number}/editions/quran-simple,{translation_code}"
     return requests.get(url).json()["data"]
+
+@st.cache_data
+def obtenir_audio_verset(surah_num, ayah_num, recitateur="ar.alafasy"):
+    try:
+        url = f"http://api.alquran.cloud/v1/ayah/{surah_num}:{ayah_num}/{recitateur}"
+        data = requests.get(url).json()
+        return data["data"]["audio"]  # lien mp3
+    except Exception as e:
+        st.warning(f"Impossible de récupérer l'audio : {e}")
+        return None
 
 # Interface
 st.set_page_config(page_title="Assistant Coran IA", layout="centered")
@@ -95,27 +106,55 @@ st.markdown(
 st.subheader(f"🌍 Traduction ({traduction_label})")
 st.write(f"*{verset_trad['text']}*")
 
+# Audio avec choix du récitateur
+recitateurs = {
+    "🎙 Mishary Rashid Alafasy": "ar.alafasy",
+    "🎙 Abdul Basit": "ar.abdulbasitmurattal",
+    "🎙 Saad Al-Ghamdi": "ar.saoodshuraim"
+}
+choix_recitateur = st.selectbox("Choisissez un récitateur :", list(recitateurs.keys()))
+code_recitateur = recitateurs[choix_recitateur]
+
+url_audio = obtenir_audio_verset(num_sourate, verset_num, recitateur=code_recitateur)
+st.subheader("🎧 Écouter le verset")
+if url_audio:
+    st.audio(url_audio, format="audio/mp3")
+else:
+    st.info("Audio non disponible pour ce verset.")
+
 cle_exacte = f"{num_sourate}:{verset_num}"
 tafsir = tafsir_data.get(cle_exacte, {}).get("text", "")
 tafsir_sans_bi = supprimer_blocs_balises_bi(tafsir)
 tafsir_clean = nettoyer_html(tafsir_sans_bi)
 
 # 🔥 AFFICHAGE UNIQUEMENT DE LA TRADUCTION
-st.subheader("🌐 Traduire le tafsir")
+st.subheader("🌐 TAFSIR DU VERSET")
 langue_trad = st.selectbox("Choisir la langue de traduction :", ["fr", "en", "ar", "es", "wolof"])
 traduction_tafsir = traduire_texte(tafsir_clean, langue_trad)
 st.markdown(f"**Traduction du tafsir en {langue_trad.upper()} :**")
 st.write(traduction_tafsir)
 
-# Q&A locale
+# ----------------- Q&A -----------------
 st.markdown("---")
 st.subheader("❓ Question sur un verset ou tafsir")
 
 question = st.text_input("Entrez votre question :")
 if question:
-    query_embed = model.encode([question], convert_to_numpy=True)
+    langue_question = detect_language(question)
+
+    # Traduire la question vers l'albanais (langue du tafsir)
+    if langue_question != 'sq':
+        question_albanais = traduire_texte(question, 'sq')
+    else:
+        question_albanais = question
+
+    # Encodage & recherche
+    query_embed = model.encode([question_albanais], convert_to_numpy=True)
     distances, indices = nn_model.kneighbors(query_embed)
+
+    st.markdown("### 📌 Résultats similaires dans le tafsir :")
     for idx in indices[0]:
-        texte = nettoyer_html(tafsir_data[tafsir_keys[idx]]["text"])
-        st.markdown(f"**📌 Résultat {tafsir_keys[idx]}**")
+        cle = tafsir_keys[idx]
+        texte = nettoyer_html(supprimer_blocs_balises_bi(tafsir_data[cle]["text"]))
+        st.markdown(f"**{cle}**")
         st.write(texte)
