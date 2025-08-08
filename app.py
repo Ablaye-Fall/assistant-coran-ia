@@ -8,6 +8,7 @@ from deep_translator import GoogleTranslator
 from sentence_transformers import SentenceTransformer
 from sklearn.neighbors import NearestNeighbors
 from langdetect import detect, DetectorFactory
+from googletrans import Translator
 from transformers import pipeline
 from gtts import gTTS
 
