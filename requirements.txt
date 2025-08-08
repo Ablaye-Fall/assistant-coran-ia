@@ -6,3 +6,5 @@ numpy>=1.26.4
 deep-translator>=1.11.4
 langdetect
 gTTS
+transformers
+torch
