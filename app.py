@@ -166,7 +166,8 @@ if question:
     langue_detectee = detect_language(question)
 
     # Recherche vectorielle dans tafsir albanais (question non traduite)
-    query_embed = model.encode([question], convert_to_numpy=True)
+    query_embed = model.encode([question])
+    query_embed = np.array(query_embed)  
     distances, indices = nn_model.kneighbors(query_embed, n_neighbors=5)
 
     candidates = []
