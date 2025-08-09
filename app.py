@@ -1,61 +1,26 @@
+import streamlit as st
 import json
 import numpy as np
-import joblib
-import streamlit as st
-import re
-from sentence_transformers import SentenceTransformer
-from deep_translator import GoogleTranslator
-from langdetect import detect, DetectorFactory
-from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
-from gtts import gTTS
-import tempfile
 import requests
+import re
+import tempfile
+from deep_translator import GoogleTranslator
+from sentence_transformers import SentenceTransformer
+from sklearn.neighbors import NearestNeighbors
+from langdetect import detect, DetectorFactory
+from transformers import pipeline
+from gtts import gTTS
 
 DetectorFactory.seed = 0  # Pour stabilité détection langue
 
-# Fonction de détection de langue
+# --- Fonctions utilitaires ---
+
 def detect_language(text):
     try:
         return detect(text)
     except:
         return "unknown"
 
-# Chargement des ressources encodées
-@st.cache_resource
-def load_data():
-    with open("sq-saadi.json", "r", encoding="utf-8") as f:
-        tafsir_data = json.load(f)
-    keys = json.load(open("tafsir_keys.json", "r", encoding="utf-8"))
-    embeddings = np.load("tafsir_embeddings.npy")
-    index = joblib.load("tafsir_index_sklearn.joblib")
-    return tafsir_data, keys, embeddings, index
-
-@st.cache_resource
-def load_sentence_model():
-    return SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
-
-@st.cache_resource
-def load_generation_model():
-    tokenizer = AutoTokenizer.from_pretrained("google/mt5-small", use_fast=False)
-    model = AutoModelForSeq2SeqLM.from_pretrained("google/mt5-small")
-    return pipeline("text2text-generation", model=model, tokenizer=tokenizer)
-
-# Chargement
-tafsir_data, tafsir_keys, tafsir_embeddings, tafsir_index = load_data()
-
-embed_model = load_sentence_model()
-gen_model = load_generation_model()
-
-# Création du modèle NearestNeighbors à partir de l'index sklearn chargé (si possible)
-# Sinon, on crée un NearestNeighbors classique et on fit avec embeddings
-try:
-    nn_model = tafsir_index
-except Exception:
-    from sklearn.neighbors import NearestNeighbors
-    nn_model = NearestNeighbors(n_neighbors=5, metric='cosine')
-    nn_model.fit(tafsir_embeddings)
-
-# Fonctions de nettoyage
 def nettoyer_html(texte):
     return re.sub(r'<[^>]+>', '', texte)
 
@@ -77,10 +42,43 @@ def translate_text(text, src_lang, tgt_lang):
         st.warning(f"Erreur traduction : {e}")
         return text
 
-# Recherche dans le tafsir albanais avec embedding
+# --- Chargement des ressources ---
+
+@st.cache_resource
+def load_resources():
+    with open("sq-saadi.json", "r", encoding="utf-8") as f:
+        tafsir_data = json.load(f)
+
+    with open("tafsir_keys.json", "r", encoding="utf-8") as f:
+        tafsir_keys = json.load(f)
+
+    embeddings = np.load("tafsir_embeddings.npy")
+    return tafsir_data, tafsir_keys, embeddings
+
+tafsir_data, tafsir_keys, tafsir_embeddings_np = load_resources()
+
+@st.cache_resource
+def load_sentence_model():
+    return SentenceTransformer("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
+
+model = load_sentence_model()
+
+# Création index NearestNeighbors pour recherche dans embeddings
+nn_model = NearestNeighbors(n_neighbors=5, metric='cosine')
+nn_model.fit(tafsir_embeddings_np)
+
+# Chargement modèle de reformulation (text2text generation)
+@st.cache_resource
+def load_gen_model():
+    return pipeline("text2text-generation", model="google/mt5-small")
+
+gen_model = load_gen_model()
+
+# --- Fonctions QA améliorées ---
+
 def search_tafsir(question_albanais, top_k=5):
-    q_embed = embed_model.encode([question_albanais], convert_to_tensor=False)
-    distances, indices = nn_model.kneighbors([q_embed], n_neighbors=top_k)
+    q_embed = model.encode([question_albanais], convert_to_tensor=False)
+    distances, indices = nn_model.kneighbors(q_embed, n_neighbors=top_k)  # corrigé ici, enlever crochet supplémentaire
     results = []
     for idx in indices[0]:
         key = tafsir_keys[idx]
@@ -129,18 +127,32 @@ def qa_multilang(user_question, history):
         f"en restant fidèle au texte.\n\nQuestion: {user_question}\nContexte: {context_translated}\nRéponse:"
     )
     generated = gen_model(prompt, max_length=250, num_return_sequences=1)
-    refined_answer = generated[0]["generated_text"]
+    refined_answer = generated[0].get("generated_text") or generated[0].get("text", "")
 
     return refined_answer, lang_detected
+
+# --- Fonctions API Quran (affichage verset + audio) ---
 
 @st.cache_data(ttl=86400)
 def obtenir_la_liste_des_surahs():
     url = "http://api.alquran.cloud/v1/surah"
-    return requests.get(url).json()["data"]
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        return response.json()["data"]
+    except Exception as e:
+        st.warning(f"Erreur lors de la récupération des sourates : {e}")
+        return []
 
 def obtenir_vers(surah_number, translation_code="en.asad"):
     url = f"http://api.alquran.cloud/v1/surah/{surah_number}/editions/quran-simple,{translation_code}"
-    return requests.get(url).json()["data"]
+    try:
+        response = requests.get(url)
+        response.raise_for_status()
+        return response.json()["data"]
+    except Exception as e:
+        st.warning(f"Erreur lors de la récupération des versets : {e}")
+        return []
 
 @st.cache_data
 def obtenir_audio_verset(surah_num, ayah_num, recitateur="ar.alafasy"):
@@ -152,15 +164,18 @@ def obtenir_audio_verset(surah_num, ayah_num, recitateur="ar.alafasy"):
         st.warning(f"Impossible de récupérer l'audio : {e}")
         return None
 
-# Interface
+# --- Interface Streamlit ---
+
 st.set_page_config(page_title="Assistant Coran IA", layout="centered")
 st.title("📖 Assistant Coran avec IA (optimisé)")
 
+# Affichage sourates
 sourates = obtenir_la_liste_des_surahs()
 sourate_noms = [f"{s['number']}. {s['englishName']} ({s['name']})" for s in sourates]
 choix_sourate = st.selectbox("📚 Choisissez une sourate :", sourate_noms)
-num_sourate = int(choix_sourate.split(".")[0])
+num_sourate = int(choix_sourate.split(".")[0]) if choix_sourate else 1
 
+# Choix traduction
 traduction_options = {
     "🇫🇷 Français (Hamidullah)": "fr.hamidullah",
     "🇬🇧 Anglais (Muhammad Asad)": "en.asad",
@@ -169,35 +184,37 @@ traduction_options = {
     "🇺🇿 Ouzbek": "uz.sodik"
 }
 traduction_label = st.selectbox("🌐 Traduction :", list(traduction_options.keys()))
-code_traduction = traduction_options[traduction_label]
+code_traduction = traduction_options.get(traduction_label, "en.asad")
 
 versets_data = obtenir_vers(num_sourate, code_traduction)
-versets_ar = versets_data[0]["ayahs"]
-versets_trad = versets_data[1]["ayahs"]
+versets_ar = versets_data[0]["ayahs"] if versets_data else []
+versets_trad = versets_data[1]["ayahs"] if len(versets_data) > 1 else []
 
-verset_num = st.number_input("📌 Choisir le verset :", 1, len(versets_ar), 1)
-verset_sel = versets_ar[verset_num - 1]
-verset_trad = versets_trad[verset_num - 1]
+verset_num = st.number_input("📌 Choisir le verset :", 1, len(versets_ar) if versets_ar else 1, 1)
+verset_sel = versets_ar[verset_num - 1] if versets_ar else {"text": ""}
+verset_trad = versets_trad[verset_num - 1] if versets_trad else {"text": ""}
 
+# Zoom verset
 zoom = st.slider("🔍 Zoom du verset", min_value=1.0, max_value=3.0, value=1.5, step=0.1)
 
 st.subheader("🕋 Verset en arabe")
 st.markdown(
-    f"<p style='font-size:{zoom}em; direction:rtl; text-align:right;'>"
-    f"**{verset_sel['text']}**</p>",
+    f"<p style='font-size:{zoom}em; direction:rtl; text-align:right; font-weight:bold;'>"
+    f"{verset_sel['text']}</p>",
     unsafe_allow_html=True
 )
 
 st.subheader(f"🌍 Traduction ({traduction_label})")
 st.write(f"*{verset_trad['text']}*")
 
+# Audio verset
 recitateurs = {
     "🎙 Mishary Rashid Alafasy": "ar.alafasy",
     "🎙 Abdul Basit": "ar.abdulbasitmurattal",
     "🎙 Saad Al-Ghamdi": "ar.saoodshuraim"
 }
 choix_recitateur = st.selectbox("Choisissez un récitateur :", list(recitateurs.keys()))
-code_recitateur = recitateurs[choix_recitateur]
+code_recitateur = recitateurs.get(choix_recitateur, "ar.alafasy")
 
 url_audio = obtenir_audio_verset(num_sourate, verset_num, recitateur=code_recitateur)
 st.subheader("🎧 Écouter le verset")
@@ -206,6 +223,7 @@ if url_audio:
 else:
     st.info("Audio non disponible pour ce verset.")
 
+# Affichage tafsir + traduction
 cle_exacte = f"{num_sourate}:{verset_num}"
 tafsir = tafsir_data.get(cle_exacte, {}).get("text", "")
 tafsir_sans_bi = supprimer_blocs_balises_bi(tafsir)
@@ -217,7 +235,8 @@ traduction_tafsir = traduire_texte(tafsir_clean, langue_trad)
 st.markdown(f"**Traduction du tafsir en {langue_trad.upper()} :**")
 st.write(traduction_tafsir)
 
-if traduction_tafsir:
+# Audio tafsir traduit
+if traduction_tafsir and not traduction_tafsir.startswith("Erreur de traduction"):
     try:
         tts = gTTS(traduction_tafsir, lang=langue_trad)
         temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
@@ -245,10 +264,12 @@ if st.button("Envoyer"):
     else:
         st.warning("Veuillez entrer une question.")
 
+# Afficher historique
 for chat in st.session_state.history:
     st.markdown(f"**🧑‍💻 Vous :** {chat['question']}")
     st.markdown(f"**🤖 Assistant :** {chat['answer']}")
 
+# Synthèse vocale de la dernière réponse
 if st.session_state.history:
     try:
         last_answer = st.session_state.history[-1]["answer"]
@@ -260,6 +281,7 @@ if st.session_state.history:
     except Exception as e:
         st.warning(f"Lecture audio indisponible : {e}")
 
+# Bouton réinitialiser conversation
 if st.button("🗑 Effacer la conversation"):
     st.session_state.history = []
     st.success("Conversation réinitialisée.")
