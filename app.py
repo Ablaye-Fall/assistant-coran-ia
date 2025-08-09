@@ -41,10 +41,11 @@ def load_sentence_model():
 model = load_sentence_model()
 
 @st.cache_resource
-def load_qa_model():
-    return pipeline("question-answering", model="distilbert-base-uncased-distilled-squad")
+def load_generation_model():
+    return pipeline("text2text-generation", model="google/mt5-small")  
+    # tu peux tester aussi "facebook/blenderbot-400M-distill" ou "google/flan-t5-base"
 
-qa_model = load_qa_model()
+generation_model = load_generation_model()
 
 # Fonction détection langue
 def detect_language(text):
@@ -181,7 +182,7 @@ if traduction_tafsir:
 
 # ----------------- Q&A -----------------
 st.markdown("---")
-st.subheader("❓ Pose ta question (arabe/français/anglais)")
+st.subheader("❓ Pose ta question (arabe/français/anglais...)")
 
 question = st.text_input("Entrez votre question :")
 if question:
@@ -189,42 +190,44 @@ if question:
     langue_question = detect_language(question_clean)
     st.write(f"Langue détectée : {langue_question}")
 
-    # Traduction question vers albanais (langue du tafsir)
-    question_albanais = translate_text(question_clean, langue_question, "sq")
+    # Traduction vers albanais (langue du tafsir)
+    question_albanais = translate_to_albanian(question_clean, langue_question)
     st.write(f"Question traduite en albanais : {question_albanais}")
 
-    # Recherche des passages proches dans le tafsir albanais
-    q_embed = sentence_model.encode([question_albanais])
-    q_embed = np.array(q_embed)
+    # Recherche contextes pertinents dans le tafsir
+    q_embed = model.encode([question_albanais])
+    distances, indices = nn_model.kneighbors(np.array(q_embed), n_neighbors=3)
 
-    distances, indices = nn_model.kneighbors(q_embed, n_neighbors=5)
-
-    candidats = []
+    meilleurs_contextes = []
     for idx in indices[0]:
         key = tafsir_keys[idx]
         contexte_brut = tafsir_data.get(key, {}).get("text", "")
-        contexte = nettoyer_html(contexte_brut)
+        contexte_clean = nettoyer_html(contexte_brut)
+        if contexte_clean:
+            meilleurs_contextes.append(contexte_clean)
 
-        if not contexte:
-            st.warning(f"Contexte vide pour la clé {key}, passage ignoré.")
-            continue
+    if meilleurs_contextes:
+        # Fusionner les passages pertinents
+        contexte_complet = " ".join(meilleurs_contextes)
 
+        # Traduire le contexte dans la langue de la question
+        contexte_traduit = traduire_texte(contexte_complet, langue_question)
+
+        # Génération réponse reformulée
+        prompt = f"Réponds à la question suivante en restant fidèle au texte fourni.\n\nQuestion: {question_clean}\nContexte: {contexte_traduit}\nRéponse:"
+        generation = generation_model(prompt, max_length=200, num_return_sequences=1)
+        reponse_finale = generation[0]["generated_text"]
+
+        st.markdown("### 💡 Réponse reformulée :")
+        st.write(reponse_finale)
+
+        # Audio TTS de la réponse
         try:
-            result = qa_model(question=question_albanais, context=contexte)
-            candidats.append((result["answer"], result["score"], key))
+            tts = gTTS(reponse_finale, lang=langue_question)
+            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+            tts.save(temp_file.name)
+            st.audio(temp_file.name, format="audio/mp3")
         except Exception as e:
-            st.error(f"Erreur QA sur contexte {key} : {e}")
-            continue
-
-    candidats = sorted(candidats, key=lambda x: x[1], reverse=True)
-
-    if candidats:
-        st.markdown("### Réponses proposées :")
-        for i, (rep, score, key) in enumerate(candidats, start=1):
-            # Traduire réponse QA vers la langue de la question
-            rep_trad = translate_text(rep, "sq", langue_question)
-            st.markdown(f"**Réponse {i}** (score: {score:.2f}, source: {key})")
-            st.write(rep_trad)
+            st.warning(f"Audio non disponible : {e}")
     else:
-        st.warning("Aucune réponse trouvée pour cette question.")
-
+        st.warning("Aucun contexte trouvé dans le tafsir.")
