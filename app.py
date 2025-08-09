@@ -152,4 +152,60 @@ reciters = {
     "🎙 Abdul Basit": "ar.abdulbasitmurattal",
     "🎙 Saad Al-Ghamdi": "ar.saoodshuraim"
 }
-reciter_choice = st.selectbox("🎧 Choisissez un récitateur :", list_
+reciter_choice = st.selectbox("🎧 Choisissez un récitateur :", list(reciters.keys()))
+audio_url = get_audio_ayah(num_surah, verset_num, reciters.get(reciter_choice, "ar.alafasy"))
+if audio_url:
+    st.audio(audio_url, format="audio/mp3")
+
+# 7. Affichage Tafsir
+cle_verset = f"{num_surah}:{verset_num}"
+tafsir_entry = tafsir_data.get(cle_verset, {})
+tafsir_raw = tafsir_entry.get("text", "") if isinstance(tafsir_entry, dict) else str(tafsir_entry)
+tafsir_clean = nettoyer_html(tafsir_raw)
+
+lang_tafsir = st.selectbox("🌐 Langue traduction du tafsir :", ["fr", "en", "ar", "es", "wo"])
+traduction_tafsir = GoogleTranslator(source='auto', target=lang_tafsir).translate(tafsir_clean) if tafsir_clean else ""
+
+st.subheader("📜 Tafsir")
+st.write(traduction_tafsir)
+
+# Audio tafsir gTTS
+tts_langs = ["fr", "en", "ar", "es"]
+if lang_tafsir in tts_langs and traduction_tafsir:
+    try:
+        tts = gTTS(traduction_tafsir, lang=lang_tafsir)
+        tmp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+        tts.save(tmp_file.name)
+        st.audio(tmp_file.name, format="audio/mp3")
+    except Exception as e:
+        st.warning(f"Audio tafsir non disponible : {e}")
+
+# 8. Q&A multilingue avec tafsir complet
+st.markdown("---")
+st.subheader("❓ Posez une question au sujet du Coran (toutes langues)")
+
+if "history" not in st.session_state:
+    st.session_state.history = []
+
+for chat in st.session_state.history:
+    st.markdown(f"**🧑‍💻 Vous :** {chat['question']}")
+    st.markdown(f"**🤖 Assistant :** {chat['answer']}")
+
+question = st.text_input("💬 Votre question :")
+
+if st.button("Envoyer"):
+    if question.strip():
+        with st.spinner("Recherche en cours..."):
+            answer, lang = qa_multilang(question)
+        st.session_state.history.append({"question": question, "answer": answer})
+        st.experimental_rerun()
+    else:
+        st.warning("Veuillez saisir une question.")
+
+if st.button("🗑 Effacer l'historique"):
+    st.session_state.history.clear()
+    st.success("Historique effacé.")
+
+# FOOTER
+st.markdown("---")
+st.markdown("⚡ *Propulsé par Sentence-Transformers + Deep Translator + API AlQuran.cloud*")
