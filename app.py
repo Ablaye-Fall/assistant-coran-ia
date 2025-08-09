@@ -77,41 +77,48 @@ def search_tafsir(query_albanian, top_k=3):
     for idx in indices[0]:
         key = tafsir_keys[idx]
         tafsir_text = tafsir_data.get(key, "")
-        results.append({"key": key, "tafsir": tafsir_text})
+        if tafsir_text:
+            results.append({"key": key, "tafsir": tafsir_text})
     return results
 
 def qa_multilang(user_question):
-    # 1️⃣ Détection de la langue
-    lang_detected = detect(user_question)
+    try:
+        lang_detected = detect(user_question)
+    except Exception:
+        lang_detected = "unknown"
 
-    # 2️⃣ Traduction en albanais si nécessaire
+    if lang_detected == "unknown":
+        return "Impossible de détecter la langue, veuillez reformuler.", lang_detected
+
+    # Traduction en albanais si besoin
     if lang_detected != "sq":
-        question_albanian = GoogleTranslator(source='auto', target='sq').translate(user_question)
+        try:
+            question_albanian = GoogleTranslator(source='auto', target='sq').translate(user_question)
+        except Exception:
+            return "Erreur lors de la traduction de la question.", lang_detected
     else:
         question_albanian = user_question
 
-    # 3️⃣ Recherche dans le tafsir (plusieurs passages)
-    results = search_tafsir(question_albanian, top_k=3)
-
-    if not results:
+    # Recherche dans le tafsir
+    tafsir_results = search_tafsir(question_albanian, top_k=3)
+    if not tafsir_results:
         return "Aucune réponse trouvée.", lang_detected
 
-    # 4️⃣ Fusionner plusieurs réponses albanaises en un seul texte, en filtrant bien
-    combined = " ".join(str(r.get('tafsir', '')).strip() for r in results if r.get('tafsir'))
-
+    # Fusionner en filtrant les entrées vides
+    combined = " ".join(r['tafsir'].strip() for r in tafsir_results if r['tafsir'].strip())
     if not combined:
         return "Aucune réponse utile trouvée dans le tafsir.", lang_detected
 
-    # 5️⃣ Traduire vers langue originale de la question
+    # Traduire vers langue originale
     if lang_detected != "sq":
         try:
             answer_translated = GoogleTranslator(source='sq', target=lang_detected).translate(combined)
         except Exception:
-            answer_translated = combined  # En cas d'erreur de traduction, on renvoie le texte albanais
+            answer_translated = combined  # En cas d'erreur, retourner le texte albanais
     else:
         answer_translated = combined
 
-    # 6️⃣ Reformuler pour un style naturel
+    # Reformuler pour style naturel
     answer_refined = reformulate_text(answer_translated, lang_detected)
 
     return answer_refined, lang_detected
