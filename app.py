@@ -76,10 +76,20 @@ def search_tafsir(query_albanian, top_k=3):
     results = []
     for idx in indices[0]:
         key = tafsir_keys[idx]
-        tafsir_text = tafsir_data.get(key, "")
-        if tafsir_text:
-            results.append({"key": key, "tafsir": tafsir_text})
+        tafsir_value = tafsir_data.get(key, "")
+        # Si tafsir_value est dict, extraire un champ texte
+        if isinstance(tafsir_value, dict):
+            # Par exemple, si tafsir_value a un champ 'text' ou 'tafsir' à récupérer
+            tafsir_text = tafsir_value.get('text') or tafsir_value.get('tafsir') or ""
+        elif isinstance(tafsir_value, str):
+            tafsir_text = tafsir_value
+        else:
+            tafsir_text = ""
+
+        if tafsir_text.strip():
+            results.append({"key": key, "tafsir": tafsir_text.strip()})
     return results
+
 
 def qa_multilang(user_question):
     try:
