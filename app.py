@@ -1,15 +1,13 @@
-import streamlit as st
 import json
 import numpy as np
-import requests
-import re
-import tempfile
-from deep_translator import GoogleTranslator
+import joblib
+import streamlit as st
 from sentence_transformers import SentenceTransformer
-from sklearn.neighbors import NearestNeighbors
-from langdetect import detect, DetectorFactory
+from deep_translator import GoogleTranslator
+from langdetect import detect
 from transformers import pipeline
 from gtts import gTTS
+import tempfile
 
 DetectorFactory.seed = 0  # Pour stabilité détection langue
 # Fonction de détection de langue
@@ -21,31 +19,26 @@ def detect_language(text):
 
 # Chargement des ressources encodées
 @st.cache_resource
-def load_resources():
+def load_data():
     with open("sq-saadi.json", "r", encoding="utf-8") as f:
         tafsir_data = json.load(f)
-
-    with open("tafsir_keys.json", "r", encoding="utf-8") as f:
-        tafsir_keys = json.load(f)
-
+    keys = json.load(open("tafsir_keys.json", "r", encoding="utf-8"))
     embeddings = np.load("tafsir_embeddings.npy")
-    return tafsir_data, tafsir_keys, embeddings
-
-tafsir_data, tafsir_keys, tafsir_embeddings_np = load_resources()
+    index = joblib.load("tafsir_index_sklearn.joblib")
+    return tafsir_data, keys, embeddings, index
 
 @st.cache_resource
 def load_sentence_model():
-    model = SentenceTransformer("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
-    return model
-# Ensuite, appelle-la pour charger le modèle
-model = load_sentence_model()
+    return SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
 
 @st.cache_resource
 def load_generation_model():
-    return pipeline("text2text-generation", model="google/mt5-small")  
-    # tu peux tester aussi "facebook/blenderbot-400M-distill" ou "google/flan-t5-base"
+    return pipeline("text2text-generation", model="google/mt5-small")
 
-generation_model = load_generation_model()
+tafsir_data, tafsir_keys, tafsir_embeddings, tafsir_index = load_resources()
+
+embed_model = load_sentence_model()
+gen_model = load_generation_model()
 
 # Fonction détection langue
 def detect_language(text):
@@ -55,18 +48,14 @@ def detect_language(text):
         return "unknown"
 
 # Fonction traduction vers albanais
-def translate_to_albanian(text, src_lang):
-    if src_lang == "sq":
+def translate_text(text, src_lang, tgt_lang):
+    if src_lang == tgt_lang:
         return text
     try:
-        return GoogleTranslator(source='auto', target='sq').translate(text)
+        return GoogleTranslator(source=src_lang, target=tgt_lang).translate(text)
     except Exception as e:
         st.warning(f"Erreur traduction : {e}")
         return text
-
-# Construire l’index
-nn_model = NearestNeighbors(n_neighbors=3, metric='cosine')
-nn_model.fit(tafsir_embeddings_np)
 
 def nettoyer_html(texte):
     return re.sub(r'<[^>]+>', '', texte)
@@ -79,6 +68,62 @@ def traduire_texte(texte, langue_cible):
         return GoogleTranslator(source='auto', target=langue_cible).translate(texte)
     except Exception as e:
         return f"Erreur de traduction : {e}"
+# --- Fonctions QA améliorées ---
+
+def search_tafsir(question_albanais, top_k=5):
+    q_embed = model.encode([question_albanais], convert_to_tensor=False)
+    distances, indices = nn_model.kneighbors([q_embed], n_neighbors=top_k)
+    results = []
+    for idx in indices[0]:
+        key = tafsir_keys[idx]
+        tafsir_txt = tafsir_data.get(key, "")
+        results.append({"key": key, "tafsir": tafsir_txt})
+    return results
+
+def qa_multilang(user_question, history):
+    try:
+        lang_detected = detect(user_question)
+    except:
+        lang_detected = "fr"  # fallback
+
+    # Ajouter historique contexte
+    if history:
+        full_question = " ".join([h["question"] for h in history]) + " " + user_question
+    else:
+        full_question = user_question
+
+    # Traduire en albanais si nécessaire
+    if lang_detected != "sq":
+        question_albanais = translate_text(full_question, lang_detected, "sq")
+    else:
+        question_albanais = full_question
+
+    # Recherche passages pertinents dans tafsir
+    tafsir_results = search_tafsir(question_albanais, top_k=5)
+    if not tafsir_results:
+        return "Aucune réponse trouvée.", lang_detected
+
+    # Concaténer tafsir albanais
+    combined_albanian = " ".join([r['tafsir'] for r in tafsir_results])
+
+    # Nettoyage HTML et balises
+    combined_albanian = nettoyer_html(supprimer_blocs_balises_bi(combined_albanian))
+
+    # Traduction contexte vers langue d'origine
+    if lang_detected != "sq":
+        context_translated = translate_text(combined_albanian, "sq", lang_detected)
+    else:
+        context_translated = combined_albanian
+
+    # Génération réponse reformulée naturelle
+    prompt = (
+        f"Réponds clairement à la question suivante en te basant sur le contexte donné, "
+        f"en restant fidèle au texte.\n\nQuestion: {user_question}\nContexte: {context_translated}\nRéponse:"
+    )
+    generated = gen_model(prompt, max_length=250, num_return_sequences=1)
+    refined_answer = generated[0]["generated_text"]
+
+    return refined_answer, lang_detected
 
 @st.cache_data(ttl=86400)
 def obtenir_la_liste_des_surahs():
@@ -180,54 +225,42 @@ if traduction_tafsir:
     except Exception as e:
         st.warning(f"Audio non disponible : {e}")
 
-# ----------------- Q&A -----------------
+# ----------------- Q&A Multilingue amélioré -----------------
 st.markdown("---")
-st.subheader("❓ Pose ta question (arabe/français/anglais...)")
+st.subheader("❓ Pose ta question (n'importe quelle langue)")
+
+if "history" not in st.session_state:
+    st.session_state.history = []
 
 question = st.text_input("Entrez votre question :")
-if question:
-    question_clean = question.strip()
-    langue_question = detect_language(question_clean)
-    st.write(f"Langue détectée : {langue_question}")
 
-    # Traduction vers albanais (langue du tafsir)
-    question_albanais = translate_to_albanian(question_clean, langue_question)
-    st.write(f"Question traduite en albanais : {question_albanais}")
-
-    # Recherche contextes pertinents dans le tafsir
-    q_embed = model.encode([question_albanais])
-    distances, indices = nn_model.kneighbors(np.array(q_embed), n_neighbors=3)
-
-    meilleurs_contextes = []
-    for idx in indices[0]:
-        key = tafsir_keys[idx]
-        contexte_brut = tafsir_data.get(key, {}).get("text", "")
-        contexte_clean = nettoyer_html(contexte_brut)
-        if contexte_clean:
-            meilleurs_contextes.append(contexte_clean)
-
-    if meilleurs_contextes:
-        # Fusionner les passages pertinents
-        contexte_complet = " ".join(meilleurs_contextes)
-
-        # Traduire le contexte dans la langue de la question
-        contexte_traduit = traduire_texte(contexte_complet, langue_question)
-
-        # Génération réponse reformulée
-        prompt = f"Réponds à la question suivante en restant fidèle au texte fourni.\n\nQuestion: {question_clean}\nContexte: {contexte_traduit}\nRéponse:"
-        generation = generation_model(prompt, max_length=200, num_return_sequences=1)
-        reponse_finale = generation[0]["generated_text"]
-
-        st.markdown("### 💡 Réponse reformulée :")
-        st.write(reponse_finale)
-
-        # Audio TTS de la réponse
-        try:
-            tts = gTTS(reponse_finale, lang=langue_question)
-            temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-            tts.save(temp_file.name)
-            st.audio(temp_file.name, format="audio/mp3")
-        except Exception as e:
-            st.warning(f"Audio non disponible : {e}")
+if st.button("Envoyer"):
+    if question and question.strip():
+        with st.spinner("Recherche et génération de la réponse..."):
+            answer, lang_used = qa_multilang(question.strip(), st.session_state.history)
+        st.session_state.history.append({"question": question.strip(), "answer": answer})
+        st.experimental_rerun()
     else:
-        st.warning("Aucun contexte trouvé dans le tafsir.")
+        st.warning("Veuillez entrer une question.")
+
+# Afficher historique
+for chat in st.session_state.history:
+    st.markdown(f"**🧑‍💻 Vous :** {chat['question']}")
+    st.markdown(f"**🤖 Assistant :** {chat['answer']}")
+
+# Synthèse vocale de la dernière réponse
+if st.session_state.history:
+    try:
+        last_answer = st.session_state.history[-1]["answer"]
+        last_lang = detect(last_answer)
+        tts = gTTS(text=last_answer, lang=last_lang)
+        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
+        tts.save(temp_file.name)
+        st.audio(temp_file.name, format="audio/mp3")
+    except Exception as e:
+        st.warning(f"Lecture audio indisponible : {e}")
+
+# Bouton réinitialiser conversation
+if st.button("🗑 Effacer la conversation"):
+    st.session_state.history = []
+    st.success("Conversation réinitialisée.")
