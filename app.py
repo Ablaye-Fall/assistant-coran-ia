@@ -222,29 +222,25 @@ st.subheader("❓ Posez une question au sujet du Coran (toutes langues)")
 if "history" not in st.session_state:
     st.session_state.history = []
 
+# Affichage de l'historique
 for chat in st.session_state.history:
     st.markdown(f"**🧑‍💻 Vous :** {chat['question']}")
     st.markdown(f"**🤖 Assistant :** {chat['answer']}")
 
-question = st.text_input("💬 Votre question :")
+# Champ de saisie
+user_q = st.text_input("💬 Posez votre question :")
 
+# Bouton envoyer
 if st.button("Envoyer"):
-    if question.strip():
-        with st.spinner("Recherche en cours..."):
-            try:
-                answer, lang = qa_multilang(question)
-            except Exception as e:
-                answer = f"Erreur lors de la recherche : {e}"
-                lang = "fr"
-        st.session_state.history.append({"question": question, "answer": answer})
-        # st.experimental_rerun()  # supprimé pour éviter erreurs
+    if user_q.strip():
+        with st.spinner("Recherche de la réponse..."):
+            answer, lang_used = qa_multilang(user_q, st.session_state.history)
+        st.session_state.history.append({"question": user_q, "answer": answer})
+        st.rerun()
     else:
-        st.warning("Veuillez saisir une question.")
+        st.warning("Veuillez entrer une question.")
 
-if st.button("🗑 Effacer l'historique"):
-    st.session_state.history.clear()
-    st.success("Historique effacé.")
-
-# FOOTER
-st.markdown("---")
-st.markdown("⚡ *Propulsé par Sentence-Transformers + Deep Translator + API AlQuran.cloud*")
+# Bouton pour effacer la conversation
+if st.button("🗑 Effacer la conversation"):
+    st.session_state.history = []
+    st.success("Conversation réinitialisée.")
