@@ -2,14 +2,17 @@ import json
 import numpy as np
 import joblib
 import streamlit as st
+import re
 from sentence_transformers import SentenceTransformer
 from deep_translator import GoogleTranslator
-from langdetect import detect
+from langdetect import detect, DetectorFactory
 from transformers import pipeline
 from gtts import gTTS
 import tempfile
+import requests
 
 DetectorFactory.seed = 0  # Pour stabilité détection langue
+
 # Fonction de détection de langue
 def detect_language(text):
     try:
@@ -35,28 +38,22 @@ def load_sentence_model():
 def load_generation_model():
     return pipeline("text2text-generation", model="google/mt5-small")
 
-tafsir_data, tafsir_keys, tafsir_embeddings, tafsir_index = load_resources()
+# Chargement
+tafsir_data, tafsir_keys, tafsir_embeddings, tafsir_index = load_data()
 
 embed_model = load_sentence_model()
 gen_model = load_generation_model()
 
-# Fonction détection langue
-def detect_language(text):
-    try:
-        return detect(text)
-    except:
-        return "unknown"
+# Création du modèle NearestNeighbors à partir de l'index sklearn chargé (si possible)
+# Sinon, on crée un NearestNeighbors classique et on fit avec embeddings
+try:
+    nn_model = tafsir_index
+except Exception:
+    from sklearn.neighbors import NearestNeighbors
+    nn_model = NearestNeighbors(n_neighbors=5, metric='cosine')
+    nn_model.fit(tafsir_embeddings)
 
-# Fonction traduction vers albanais
-def translate_text(text, src_lang, tgt_lang):
-    if src_lang == tgt_lang:
-        return text
-    try:
-        return GoogleTranslator(source=src_lang, target=tgt_lang).translate(text)
-    except Exception as e:
-        st.warning(f"Erreur traduction : {e}")
-        return text
-
+# Fonctions de nettoyage
 def nettoyer_html(texte):
     return re.sub(r'<[^>]+>', '', texte)
 
@@ -68,10 +65,19 @@ def traduire_texte(texte, langue_cible):
         return GoogleTranslator(source='auto', target=langue_cible).translate(texte)
     except Exception as e:
         return f"Erreur de traduction : {e}"
-# --- Fonctions QA améliorées ---
 
+def translate_text(text, src_lang, tgt_lang):
+    if src_lang == tgt_lang:
+        return text
+    try:
+        return GoogleTranslator(source=src_lang, target=tgt_lang).translate(text)
+    except Exception as e:
+        st.warning(f"Erreur traduction : {e}")
+        return text
+
+# Recherche dans le tafsir albanais avec embedding
 def search_tafsir(question_albanais, top_k=5):
-    q_embed = model.encode([question_albanais], convert_to_tensor=False)
+    q_embed = embed_model.encode([question_albanais], convert_to_tensor=False)
     distances, indices = nn_model.kneighbors([q_embed], n_neighbors=top_k)
     results = []
     for idx in indices[0]:
@@ -159,7 +165,6 @@ traduction_options = {
     "🇮🇩 Indonésien": "id.indonesian",
     "🇹🇷 Turc": "tr.translator",
     "🇺🇿 Ouzbek": "uz.sodik"
-
 }
 traduction_label = st.selectbox("🌐 Traduction :", list(traduction_options.keys()))
 code_traduction = traduction_options[traduction_label]
@@ -172,10 +177,8 @@ verset_num = st.number_input("📌 Choisir le verset :", 1, len(versets_ar), 1)
 verset_sel = versets_ar[verset_num - 1]
 verset_trad = versets_trad[verset_num - 1]
 
-# Option de zoom
 zoom = st.slider("🔍 Zoom du verset", min_value=1.0, max_value=3.0, value=1.5, step=0.1)
 
-# Affichage avec zoom
 st.subheader("🕋 Verset en arabe")
 st.markdown(
     f"<p style='font-size:{zoom}em; direction:rtl; text-align:right;'>"
@@ -186,7 +189,6 @@ st.markdown(
 st.subheader(f"🌍 Traduction ({traduction_label})")
 st.write(f"*{verset_trad['text']}*")
 
-# Audio avec choix du récitateur
 recitateurs = {
     "🎙 Mishary Rashid Alafasy": "ar.alafasy",
     "🎙 Abdul Basit": "ar.abdulbasitmurattal",
@@ -207,14 +209,12 @@ tafsir = tafsir_data.get(cle_exacte, {}).get("text", "")
 tafsir_sans_bi = supprimer_blocs_balises_bi(tafsir)
 tafsir_clean = nettoyer_html(tafsir_sans_bi)
 
-# 🔥 AFFICHAGE UNIQUEMENT DE LA TRADUCTION
 st.subheader("🌐 TAFSIR DU VERSET")
 langue_trad = st.selectbox("Choisir la langue de traduction :", ["fr", "en", "ar", "es", "wolof"])
 traduction_tafsir = traduire_texte(tafsir_clean, langue_trad)
 st.markdown(f"**Traduction du tafsir en {langue_trad.upper()} :**")
 st.write(traduction_tafsir)
 
-# Audio du tafsir traduit
 if traduction_tafsir:
     try:
         tts = gTTS(traduction_tafsir, lang=langue_trad)
@@ -243,12 +243,10 @@ if st.button("Envoyer"):
     else:
         st.warning("Veuillez entrer une question.")
 
-# Afficher historique
 for chat in st.session_state.history:
     st.markdown(f"**🧑‍💻 Vous :** {chat['question']}")
     st.markdown(f"**🤖 Assistant :** {chat['answer']}")
 
-# Synthèse vocale de la dernière réponse
 if st.session_state.history:
     try:
         last_answer = st.session_state.history[-1]["answer"]
@@ -260,7 +258,6 @@ if st.session_state.history:
     except Exception as e:
         st.warning(f"Lecture audio indisponible : {e}")
 
-# Bouton réinitialiser conversation
 if st.button("🗑 Effacer la conversation"):
     st.session_state.history = []
     st.success("Conversation réinitialisée.")
