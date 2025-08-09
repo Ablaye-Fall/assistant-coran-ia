@@ -65,15 +65,18 @@ nn_model.fit(tafsir_embeddings_np)
 
 # Recherche dans le tafsir
 def search_tafsir(query_albanian, top_k=3):
-    # Encodage direct en numpy array 1D
-    query_embed = model.encode(query_albanian, convert_to_tensor=False)  # shape = (embedding_size,)
-    query_embed = np.array(query_embed).reshape(1, -1)  # reshape pour NearestNeighbors
-    
+    query_embed = model.encode(query_albanian, convert_to_tensor=False)
+    query_embed = np.array(query_embed, dtype=np.float32).reshape(1, -1)  # Format correct pour kneighbors
     distances, indices = nn_model.kneighbors(query_embed, n_neighbors=top_k)
-    return [
-        {"key": tafsir_keys[idx], "tafsir": tafsir_data.get(tafsir_keys[idx], "")}
-        for idx in indices[0]
-    ]
+    results = []
+    for idx in indices[0]:
+        tafsir_entry = tafsir_data.get(tafsir_keys[idx], {})
+        tafsir_text = tafsir_entry.get("text", "") if isinstance(tafsir_entry, dict) else str(tafsir_entry)
+        results.append({
+            "key": tafsir_keys[idx],
+            "tafsir": tafsir_text
+        })
+    return results
 
 # Reformulation via traduction intermédiaire
 def reformulate_text(text, target_lang):
@@ -86,7 +89,7 @@ def reformulate_text(text, target_lang):
 # QA multilingue avec contexte
 def qa_multilang(user_question, history):
     lang_detected = detect_language(user_question)
-    full_question = " ".join({h["question"] for h in history}) + " " + user_question if history else user_question
+    full_question = " ".join([h["question"] for h in history]) + " " + user_question if history else user_question
 
     if lang_detected != "sq":
         question_albanian = GoogleTranslator(source='auto', target='sq').translate(full_question)
@@ -97,7 +100,7 @@ def qa_multilang(user_question, history):
     if not tafsir_results:
         return "Aucune réponse trouvée.", lang_detected
 
-    combined_albanian = " ".join(res['tafsir'] for res in tafsir_results)
+    combined_albanian = " ".join(str(res['tafsir']) for res in tafsir_results if res['tafsir'])
 
     if lang_detected != "sq":
         answer_translated = GoogleTranslator(source='sq', target=lang_detected).translate(combined_albanian)
@@ -140,7 +143,7 @@ st.title("📖 Assistant Coran avec IA (optimisé)")
 sourates = obtenir_la_liste_des_surahs()
 sourate_noms = [f"{s['number']}. {s['englishName']} ({s['name']})" for s in sourates]
 choix_sourate = st.selectbox("📚 Choisissez une sourate :", sourate_noms)
-num_sourate = int(choix_sourate.split(".")[0])
+num_sourate = int(choix_sourate.split(".")[0]) if choix_sourate else 1
 
 # Traductions
 traduction_options = {
@@ -150,16 +153,16 @@ traduction_options = {
     "🇹🇷 Turc": "tr.translator",
     "🇺🇿 Ouzbek": "uz.sodik"
 }
-traduction_label = st.selectbox("🌐 Traduction :", traduction_options.keys())
-code_traduction = traduction_options[traduction_label]
+traduction_label = st.selectbox("🌐 Traduction :", list(traduction_options.keys()))
+code_traduction = traduction_options.get(traduction_label, "en.asad")
 
 versets_data = obtenir_vers(num_sourate, code_traduction)
 versets_ar = versets_data[0]["ayahs"] if versets_data else []
 versets_trad = versets_data[1]["ayahs"] if len(versets_data) > 1 else []
 
-verset_num = st.number_input("📌 Choisir le verset :", 1, len(versets_ar), 1)
-verset_sel = versets_ar[verset_num - 1]
-verset_trad = versets_trad[verset_num - 1]
+verset_num = st.number_input("📌 Choisir le verset :", 1, len(versets_ar) if versets_ar else 1, 1)
+verset_sel = versets_ar[verset_num - 1] if versets_ar else {"text": ""}
+verset_trad = versets_trad[verset_num - 1] if versets_trad else {"text": ""}
 
 # Affichage verset
 zoom = st.slider("🔍 Zoom du verset", 1.0, 3.0, 1.5, 0.1)
@@ -173,14 +176,16 @@ recitateurs = {
     "🎙 Abdul Basit": "ar.abdulbasitmurattal",
     "🎙 Saad Al-Ghamdi": "ar.saoodshuraim"
 }
-choix_recitateur = st.selectbox("Choisissez un récitateur :", recitateurs.keys())
-url_audio = obtenir_audio_verset(num_sourate, verset_num, recitateurs[choix_recitateur])
+choix_recitateur = st.selectbox("Choisissez un récitateur :", list(recitateurs.keys()))
+url_audio = obtenir_audio_verset(num_sourate, verset_num, recitateurs.get(choix_recitateur, "ar.alafasy"))
 if url_audio:
     st.audio(url_audio, format="audio/mp3")
 
 # Tafsir
 cle_exacte = f"{num_sourate}:{verset_num}"
-tafsir_clean = nettoyer_html(tafsir_data.get(cle_exacte, {}).get("text", ""))
+tafsir_entry = tafsir_data.get(cle_exacte, {})
+tafsir_text_raw = tafsir_entry.get("text", "") if isinstance(tafsir_entry, dict) else str(tafsir_entry)
+tafsir_clean = nettoyer_html(tafsir_text_raw)
 langue_trad = st.selectbox("Langue traduction tafsir :", ["fr", "en", "ar", "es", "wo"])
 traduction_tafsir = traduire_texte(tafsir_clean, langue_trad)
 st.write(traduction_tafsir)
