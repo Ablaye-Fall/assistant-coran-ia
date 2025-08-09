@@ -33,7 +33,7 @@ def load_tafsir_resources():
     with open("tafsir_keys.json", "r", encoding="utf-8") as f:
         tafsir_keys = json.load(f)
     embeddings = np.load("tafsir_embeddings.npy")
-    nn_index = NearestNeighbors(n_neighbors=5, metric='cosine')
+    nn_index = NearestNeighbors(n_neighbors=10, metric='cosine')
     nn_index.fit(embeddings)
     return tafsir_data, tafsir_keys, embeddings, nn_index
 
@@ -45,7 +45,7 @@ def load_sentence_model():
 def load_reranker_model():
     return CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
 
-tafsir_data, tafsir_keys, tafsir_embeddings, tafsir_index = load_data()
+tafsir_data, tafsir_keys, tafsir_embeddings, tafsir_index = load_tafsir_resources()
 model = load_sentence_model()
 reranker = load_reranker_model()
 
@@ -98,15 +98,6 @@ def rerank_results(question, passages):
     scores = reranker.predict(pairs)
     ranked = sorted(zip(passages, scores), key=lambda x: x[1], reverse=True)
     return ranked
-
-# 4. Reformulation style naturel
-def reformulate_text(text, target_lang):
-    try:
-        temp_en = GoogleTranslator(source='auto', target='en').translate(text)
-        refined = GoogleTranslator(source='en', target=target_lang).translate(temp_en)
-        return refined
-    except Exception:
-        return text
 
 # 5. Pipeline QA multilingue amélioré
 def qa_multilang(user_question):
@@ -243,9 +234,9 @@ user_q = st.text_input("💬 Posez votre question :")
 if st.button("Envoyer"):
     if user_q.strip():
         with st.spinner("Recherche de la réponse..."):
-            answer, lang_used = qa_multilang(user_q, st.session_state.history)
+            answer, lang_used = qa_multilang(user_q)
         st.session_state.history.append({"question": user_q, "answer": answer})
-        st.rerun()
+        st.experimental_rerun()
     else:
         st.warning("Veuillez entrer une question.")
 
