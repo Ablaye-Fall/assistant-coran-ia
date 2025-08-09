@@ -65,8 +65,11 @@ nn_model.fit(tafsir_embeddings_np)
 
 # Recherche dans le tafsir
 def search_tafsir(query_albanian, top_k=3):
-    query_embed = model.encode([query_albanian], convert_to_tensor=False)
-    distances, indices = nn_model.kneighbors([query_embed], n_neighbors=top_k)
+    # Encodage direct en numpy array 1D
+    query_embed = model.encode(query_albanian, convert_to_tensor=False)  # shape = (embedding_size,)
+    query_embed = np.array(query_embed).reshape(1, -1)  # reshape pour NearestNeighbors
+    
+    distances, indices = nn_model.kneighbors(query_embed, n_neighbors=top_k)
     return [
         {"key": tafsir_keys[idx], "tafsir": tafsir_data.get(tafsir_keys[idx], "")}
         for idx in indices[0]
