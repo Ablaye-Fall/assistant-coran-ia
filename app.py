@@ -59,7 +59,7 @@ tafsir_data, tafsir_keys, tafsir_embeddings_np = load_resources()
 
 @st.cache_resource
 def load_sentence_model():
-    return SentenceTransformer("sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2")
+    return SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
 
 model = load_sentence_model()
 
@@ -67,32 +67,38 @@ model = load_sentence_model()
 nn_model = NearestNeighbors(n_neighbors=5, metric='cosine')
 nn_model.fit(tafsir_embeddings_np)
 
-# Chargement modèle de reformulation (text2text generation)
-@st.cache_resource
-def load_gen_model():
-    return pipeline("text2text-generation", model="google/mt5-small")
-
-gen_model = load_gen_model()
-
-# --- Fonctions QA améliorées ---
-
-def search_tafsir(question_albanais, top_k=5):
-    q_embed = model.encode([question_albanais], convert_to_tensor=False)
-    distances, indices = nn_model.kneighbors(q_embed, n_neighbors=top_k)  # corrigé ici, enlever crochet supplémentaire
+# 🔹 2. RECHERCHE DANS LE TAFSIR
+# ==============================
+def search_tafsir(query_albanian, top_k=3):
+    query_embed = model.encode([query_albanian], convert_to_tensor=False)
+    distances, indices = tafsir_index.kneighbors([query_embed], n_neighbors=top_k)
     results = []
     for idx in indices[0]:
-        key = tafsir_keys[idx]
-        tafsir_txt = tafsir_data.get(key, "")
-        results.append({"key": key, "tafsir": tafsir_txt})
+        verse_key = tafsir_keys[idx]
+        results.append({
+            "key": verse_key,
+            "tafsir": tafsir_data.get(verse_key, "")
+        })
     return results
 
-def qa_multilang(user_question, history):
+# ==============================
+# 🔹 3. REFORMULATION STYLE "CHATGPT"
+# ==============================
+def reformulate_text(text, target_lang):
     try:
-        lang_detected = detect(user_question)
-    except:
-        lang_detected = "fr"  # fallback
+        temp_en = GoogleTranslator(source='auto', target='en').translate(text)
+        refined = GoogleTranslator(source='en', target=target_lang).translate(temp_en)
+        return refined
+    except Exception:
+        return text
 
-    # Ajouter historique contexte
+# ==============================
+# 🔹 4. FONCTION QA MULTILINGUE AVEC CONTEXTE
+# ==============================
+def qa_multilang(user_question, history):
+    lang_detected = detect(user_question)
+
+    # Ajouter le contexte des questions précédentes
     if history:
         full_question = " ".join([h["question"] for h in history]) + " " + user_question
     else:
@@ -100,36 +106,28 @@ def qa_multilang(user_question, history):
 
     # Traduire en albanais si nécessaire
     if lang_detected != "sq":
-        question_albanais = translate_text(full_question, lang_detected, "sq")
+        question_albanian = GoogleTranslator(source='auto', target='sq').translate(full_question)
     else:
-        question_albanais = full_question
+        question_albanian = full_question
 
-    # Recherche passages pertinents dans tafsir
-    tafsir_results = search_tafsir(question_albanais, top_k=5)
+    # Recherche dans le tafsir
+    tafsir_results = search_tafsir(question_albanian, top_k=3)
+
     if not tafsir_results:
         return "Aucune réponse trouvée.", lang_detected
 
-    # Concaténer tafsir albanais
-    combined_albanian = " ".join([r['tafsir'] for r in tafsir_results])
+    combined_albanian = " ".join([res['tafsir'] for res in tafsir_results])
 
-    # Nettoyage HTML et balises
-    combined_albanian = nettoyer_html(supprimer_blocs_balises_bi(combined_albanian))
-
-    # Traduction contexte vers langue d'origine
+    # Traduction vers la langue d'origine
     if lang_detected != "sq":
-        context_translated = translate_text(combined_albanian, "sq", lang_detected)
+        answer_translated = GoogleTranslator(source='sq', target=lang_detected).translate(combined_albanian)
     else:
-        context_translated = combined_albanian
+        answer_translated = combined_albanian
 
-    # Génération réponse reformulée naturelle
-    prompt = (
-        f"Réponds clairement à la question suivante en te basant sur le contexte donné, "
-        f"en restant fidèle au texte.\n\nQuestion: {user_question}\nContexte: {context_translated}\nRéponse:"
-    )
-    generated = gen_model(prompt, max_length=250, num_return_sequences=1)
-    refined_answer = generated[0].get("generated_text") or generated[0].get("text", "")
+    # Reformulation naturelle
+    answer_refined = reformulate_text(answer_translated, lang_detected)
 
-    return refined_answer, lang_detected
+    return answer_refined, lang_detected
 
 # --- Fonctions API Quran (affichage verset + audio) ---
 
@@ -249,39 +247,30 @@ if traduction_tafsir and not traduction_tafsir.startswith("Erreur de traduction"
 # ----------------- Q&A Multilingue amélioré -----------------
 st.markdown("---")
 st.subheader("❓ Pose ta question (n'importe quelle langue)")
-
+# Initialiser l'historique dans session_state
 if "history" not in st.session_state:
     st.session_state.history = []
 
-question = st.text_input("Entrez votre question :")
-
-if st.button("Envoyer"):
-    if question and question.strip():
-        with st.spinner("Recherche et génération de la réponse..."):
-            answer, lang_used = qa_multilang(question.strip(), st.session_state.history)
-        st.session_state.history.append({"question": question.strip(), "answer": answer})
-        st.experimental_rerun()
-    else:
-        st.warning("Veuillez entrer une question.")
-
-# Afficher historique
+# Affichage de l'historique
 for chat in st.session_state.history:
     st.markdown(f"**🧑‍💻 Vous :** {chat['question']}")
     st.markdown(f"**🤖 Assistant :** {chat['answer']}")
 
-# Synthèse vocale de la dernière réponse
-if st.session_state.history:
-    try:
-        last_answer = st.session_state.history[-1]["answer"]
-        last_lang = detect(last_answer)
-        tts = gTTS(text=last_answer, lang=last_lang)
-        temp_file = tempfile.NamedTemporaryFile(delete=False, suffix=".mp3")
-        tts.save(temp_file.name)
-        st.audio(temp_file.name, format="audio/mp3")
-    except Exception as e:
-        st.warning(f"Lecture audio indisponible : {e}")
+# Champ de saisie
+user_q = st.text_input("💬 Posez votre question :")
 
-# Bouton réinitialiser conversation
+# Bouton envoyer
+if st.button("Envoyer"):
+    if user_q.strip():
+        with st.spinner("Recherche de la réponse..."):
+            answer, lang_used = qa_multilang(user_q, st.session_state.history)
+        st.session_state.history.append({"question": user_q, "answer": answer})
+        st.rerun()
+    else:
+        st.warning("Veuillez entrer une question.")
+
+# Bouton pour effacer la conversation
 if st.button("🗑 Effacer la conversation"):
     st.session_state.history = []
     st.success("Conversation réinitialisée.")
+
