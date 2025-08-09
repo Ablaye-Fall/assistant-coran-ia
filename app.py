@@ -6,7 +6,7 @@ import re
 from sentence_transformers import SentenceTransformer
 from deep_translator import GoogleTranslator
 from langdetect import detect, DetectorFactory
-from transformers import pipeline
+from transformers import AutoTokenizer, AutoModelForSeq2SeqLM, pipeline
 from gtts import gTTS
 import tempfile
 import requests
@@ -36,7 +36,9 @@ def load_sentence_model():
 
 @st.cache_resource
 def load_generation_model():
-    return pipeline("text2text-generation", model="google/mt5-small")
+    tokenizer = AutoTokenizer.from_pretrained("google/mt5-small", use_fast=False)
+    model = AutoModelForSeq2SeqLM.from_pretrained("google/mt5-small")
+    return pipeline("text2text-generation", model=model, tokenizer=tokenizer)
 
 # Chargement
 tafsir_data, tafsir_keys, tafsir_embeddings, tafsir_index = load_data()
