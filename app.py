@@ -4,7 +4,7 @@ import streamlit as st
 import requests
 import re
 import tempfile
-from sentence_transformers import SentenceTransformer
+from sentence_transformers import SentenceTransformer, CrossEncoder
 from deep_translator import GoogleTranslator
 from langdetect import detect, DetectorFactory
 from sklearn.neighbors import NearestNeighbors
@@ -37,12 +37,17 @@ def load_tafsir_resources():
     nn_index.fit(embeddings)
     return tafsir_data, tafsir_keys, embeddings, nn_index
 
-@st.cache_resource(show_spinner=False)
-def load_model():
+@st.cache_resource
+def load_sentence_model():
     return SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
 
-tafsir_data, tafsir_keys, tafsir_embeddings, tafsir_index = load_tafsir_resources()
-model = load_model()
+@st.cache_resource
+def load_reranker_model():
+    return CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+
+tafsir_data, tafsir_keys, tafsir_embeddings, tafsir_index = load_data()
+model = load_sentence_model()
+reranker = load_reranker_model()
 
 # --- API QURAN ---
 @st.cache_data(ttl=86400)
@@ -69,37 +74,41 @@ def get_audio_ayah(surah_num, ayah_num, reciter="ar.alafasy"):
     except:
         return None
 
-# --- FONCTIONS PRINCIPALES ---
-def search_tafsir(query_albanian, top_k=3):
+# 2. Recherche vectorielle
+def search_tafsir(query_albanian, top_k=10):
     query_embed = model.encode([query_albanian], convert_to_tensor=False)
     distances, indices = tafsir_index.kneighbors(query_embed, n_neighbors=top_k)
     results = []
     for idx in indices[0]:
         key = tafsir_keys[idx]
         tafsir_value = tafsir_data.get(key, "")
-        # Si tafsir_value est dict, extraire un champ texte
         if isinstance(tafsir_value, dict):
-            # Par exemple, si tafsir_value a un champ 'text' ou 'tafsir' à récupérer
             tafsir_text = tafsir_value.get('text') or tafsir_value.get('tafsir') or ""
         elif isinstance(tafsir_value, str):
             tafsir_text = tafsir_value
         else:
             tafsir_text = ""
-
         if tafsir_text.strip():
             results.append({"key": key, "tafsir": tafsir_text.strip()})
     return results
-# 🔹 3. REFORMULATION STYLE "CHATGPT"
-# ==============================
+
+# 3. Reranker
+def rerank_results(question, passages):
+    pairs = [(question, p) for p in passages]
+    scores = reranker.predict(pairs)
+    ranked = sorted(zip(passages, scores), key=lambda x: x[1], reverse=True)
+    return ranked
+
+# 4. Reformulation style naturel
 def reformulate_text(text, target_lang):
     try:
-        # Double traduction pour adoucir la formulation
         temp_en = GoogleTranslator(source='auto', target='en').translate(text)
         refined = GoogleTranslator(source='en', target=target_lang).translate(temp_en)
         return refined
     except Exception:
-        return text  
+        return text
 
+# 5. Pipeline QA multilingue amélioré
 def qa_multilang(user_question):
     try:
         lang_detected = detect(user_question)
@@ -109,7 +118,7 @@ def qa_multilang(user_question):
     if lang_detected == "unknown":
         return "Impossible de détecter la langue, veuillez reformuler.", lang_detected
 
-    # Traduction en albanais si besoin
+    # Traduction en albanais
     if lang_detected != "sq":
         try:
             question_albanian = GoogleTranslator(source='auto', target='sq').translate(user_question)
@@ -118,28 +127,28 @@ def qa_multilang(user_question):
     else:
         question_albanian = user_question
 
-    # Recherche dans le tafsir
-    tafsir_results = search_tafsir(question_albanian, top_k=3)
-    if not tafsir_results:
+    # Recherche vectorielle top_k=10
+    results = search_tafsir(question_albanian, top_k=10)
+    passages = [r['tafsir'] for r in results if isinstance(r['tafsir'], str) and r['tafsir'].strip()]
+    if not passages:
         return "Aucune réponse trouvée.", lang_detected
 
-    # Fusionner en filtrant les entrées vides
-    combined = " ".join(r['tafsir'].strip() for r in tafsir_results if r['tafsir'].strip())
-    if not combined:
-        return "Aucune réponse utile trouvée dans le tafsir.", lang_detected
+    # Reranker
+    ranked = rerank_results(question_albanian, passages)
+    best_passages = [p[0] for p in ranked[:3]]
+    combined = " ".join(best_passages)
 
-    # Traduire vers langue originale
+    # Traduction vers langue originale
     if lang_detected != "sq":
         try:
             answer_translated = GoogleTranslator(source='sq', target=lang_detected).translate(combined)
         except Exception:
-            answer_translated = combined  # En cas d'erreur, retourner le texte albanais
+            answer_translated = combined
     else:
         answer_translated = combined
 
-    # Reformuler pour style naturel
+    # Reformuler
     answer_refined = reformulate_text(answer_translated, lang_detected)
-
     return answer_refined, lang_detected
 
 # --- INTERFACE STREAMLIT ---
