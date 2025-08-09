@@ -89,7 +89,16 @@ def search_tafsir(query_albanian, top_k=3):
         if tafsir_text.strip():
             results.append({"key": key, "tafsir": tafsir_text.strip()})
     return results
-
+# 🔹 3. REFORMULATION STYLE "CHATGPT"
+# ==============================
+def reformulate_text(text, target_lang):
+    try:
+        # Double traduction pour adoucir la formulation
+        temp_en = GoogleTranslator(source='auto', target='en').translate(text)
+        refined = GoogleTranslator(source='en', target=target_lang).translate(temp_en)
+        return refined
+    except Exception:
+        return text  
 
 def qa_multilang(user_question):
     try:
