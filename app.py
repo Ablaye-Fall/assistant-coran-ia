@@ -145,14 +145,8 @@ def filter_passages(passages, min_len=50, max_len=1500):
         out.append(p_clean.strip())
     return out
 
-# --- RESUME LOCAL (sans OpenAI) ---
-def summarize_local(question: str, passage: str, out_lang: str = "fr"):
-    sentences = re.split(r'(?<=[.!?]) +', passage)
-    excerpt = " ".join(sentences[:6])  # quelques phrases
-    return reformulate_local(excerpt, out_lang)
-
 # --- PIPELINE QA MULTILINGUE ---
-def qa_multilang(user_question):
+def qa_pipeline(user_question: str, target_lang: str = "fr"):
         # 1. détection langue
     lang = safe_detect(user_question)
     # 2. traduction en albanais si ton tafsir est en albanais (adaptable)
@@ -183,9 +177,6 @@ def qa_multilang(user_question):
     # si tu veux, combiner top 2 ou 3 :
     # top_passage = " ".join(filtered[:3])
 
-
-    # Résumé local
-    summarized = summarize_local(question_albanian, combined, lang_detected)
     # 8. final polishing (reformulation fluide si besoin)
     polished = reformulate_local(summarized, target_lang)
 
