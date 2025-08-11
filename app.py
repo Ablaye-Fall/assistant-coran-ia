@@ -21,18 +21,6 @@ def nettoyer_html(texte: str) -> str:
     texte = re.sub(r'\s+', ' ', texte)
     return texte.strip()
 
-def safe_detect(text: str) -> str:
-    try:
-        return detect(text)
-    except Exception:
-        return "unknown"
-
-def translate_text(text: str, target: str, src: str = "auto") -> str:
-    try:
-        return GoogleTranslator(source=src, target=target).translate(text)
-    except Exception:
-        return text
-
 def reformulate_local(text: str, target_lang: str) -> str:
     """
     Fallback local "reformulation" using double translation to smooth style.
@@ -146,43 +134,47 @@ def filter_passages(passages, min_len=50, max_len=1500):
     return out
 
 # --- PIPELINE QA MULTILINGUE ---
-def qa_pipeline(user_question: str, target_lang: str = "fr"):
-        # 1. détection langue
-    lang = safe_detect(user_question)
-    # 2. traduction en albanais si ton tafsir est en albanais (adaptable)
-    # ici on suppose tafsir_data est en albanais (sq), si non adapter.
-    if lang != "sq":
-        question_for_search = translate_text(user_question, "sq", src=lang)
+def qa_multilang(user_question):
+    try:
+        lang_detected = detect(user_question)
+    except Exception:
+        lang_detected = "unknown"
+
+    if lang_detected == "unknown":
+        return "Impossible de détecter la langue, veuillez reformuler.", lang_detected
+
+    # Traduction en albanais
+    if lang_detected != "sq":
+        try:
+            question_albanian = GoogleTranslator(source='auto', target='sq').translate(user_question)
+        except Exception:
+            return "Erreur lors de la traduction de la question.", lang_detected
     else:
-        question_for_search = user_question
+        question_albanian = user_question
 
-    # 3. recherche initiale (top_k)
-    initial = search_tafsir(question_for_search, top_k=10)
-    if not initial:
-        return "Aucune réponse trouvée dans la base tafsir."
+    # Recherche vectorielle top_k=10
+    results = search_tafsir(question_albanian, top_k=10)
+    passages = [r['tafsir'] for r in results if isinstance(r['tafsir'], str) and r['tafsir'].strip()]
+    if not passages:
+        return "Aucune réponse trouvée.", lang_detected
 
-    # collect passages
-    passages = [r['tafsir'] for r in initial if isinstance(r.get('tafsir', ""), str)]
+    # Reranker
+    ranked = rerank_results(question_albanian, passages)
+    best_passages = [p[0] for p in ranked[:3]]
+    combined = " ".join(best_passages)
 
-    # 4. rerank (utilise question_for_search - en albanais)
-    ranked = rerank_results(question_for_search, passages)
+    # Traduction vers langue originale
+    if lang_detected != "sq":
+        try:
+            answer_translated = GoogleTranslator(source='sq', target=lang_detected).translate(combined)
+        except Exception:
+            answer_translated = combined
+    else:
+        answer_translated = combined
 
-    # 5. filtrage anti-bruit
-    filtered = filter_passages(ranked, min_len=60, max_len=1500)
-    if not filtered:
-        return "Aucune réponse utile après filtrage."
-
-    # 6. prendre top passage(s)
-    top_passage = filtered[0]
-    # si tu veux, combiner top 2 ou 3 :
-    # top_passage = " ".join(filtered[:3])
-
-    # 8. final polishing (reformulation fluide si besoin)
-    polished = reformulate_local(summarized, target_lang)
-
-    # 9. retourner
-    return polished
-
+    # Reformuler
+    answer_refined = reformulate_text(answer_translated, lang_detected)
+    return answer_refined, lang_detected
 
     # Traduction vers langue originale si nécessaire
     if lang_detected != "sq":
@@ -286,7 +278,7 @@ user_q = st.text_input("💬 Posez votre question :")
 if st.button("Envoyer"):
     if user_q.strip():
         with st.spinner("Recherche de la réponse..."):
-            answer, lang_used = qa_pipeline(user_q)
+            answer, lang_used = qa_multilang(user_q)
         st.session_state.history.append({"question": user_q, "answer": answer})
         st.rerun()
     else:
