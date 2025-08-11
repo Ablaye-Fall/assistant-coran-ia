@@ -153,6 +153,8 @@ def qa_multilang(user_question):
     ranked = rerank_results(question_albanian, passages)
     best_passages = ranked[:3]  # ✅ Correction : pas de p[0]
     combined = " ".join(best_passages)
+    # Nettoyage
+    cleaned = nettoyer_html(best_passage)
 
     # Traduction vers langue originale
     if lang_detected != "sq":
