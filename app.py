@@ -13,18 +13,33 @@ from gtts import gTTS
 DetectorFactory.seed = 0  # stabilité détection langue
 
 # --- UTILITAIRES ---
-def nettoyer_html(texte):
+def nettoyer_html(texte: str) -> str:
+    if not isinstance(texte, str):
+        texte = str(texte)
     texte = re.sub(r'<b><i>.*?</i></b>', '', texte, flags=re.DOTALL)
-    return re.sub(r'<[^>]+>', '', texte)
+    texte = re.sub(r'<[^>]+>', '', texte)
+    texte = re.sub(r'\s+', ' ', texte)
+    return texte.strip()
 
-def reformulate_local(text, target_lang):
+def safe_detect(text: str) -> str:
+    try:
+        return detect(text)
+    except Exception:
+        return "unknown"
+
+def translate_text(text: str, target: str, src: str = "auto") -> str:
+    try:
+        return GoogleTranslator(source=src, target=target).translate(text)
+    except Exception:
+        return text
+
+def reformulate_local(text: str, target_lang: str) -> str:
     """
-    Reformulation locale par double traduction pour lisser la formulation.
+    Fallback local "reformulation" using double translation to smooth style.
     """
     try:
-        temp_en = GoogleTranslator(source='auto', target='en').translate(text)
-        refined = GoogleTranslator(source='en', target=target_lang).translate(temp_en)
-        return refined
+        en = GoogleTranslator(source='auto', target='en').translate(text)
+        return GoogleTranslator(source='en', target=target_lang).translate(en)
     except Exception:
         return text
 
@@ -96,11 +111,39 @@ def search_tafsir(query_albanian, top_k=10):
     return results
 
 # --- RERANKER ---
-def rerank_results(question, passages):
+def rerank_results(question: str, passages: list):
+    """
+    passages: list[str]
+    retourne: list[str] triés par score décroissant
+    """
+    if not passages:
+        return []
     pairs = [(question, p) for p in passages]
-    scores = reranker.predict(pairs)
+    try:
+        scores = reranker.predict(pairs)
+    except Exception:
+        # si reranker échoue, renvoie passages originaux
+        return passages
     ranked = sorted(zip(passages, scores), key=lambda x: x[1], reverse=True)
-    return ranked
+    return [p for p, s in ranked]
+# -------------------------
+# FILTRAGE / CLEAN
+# -------------------------
+def filter_passages(passages, min_len=50, max_len=1500):
+    out = []
+    for p in passages:
+        p_clean = nettoyer_html(p)
+        # supprimer courts snippets non informatifs
+        if len(p_clean) < min_len:
+            continue
+        # couper très long en paragraphes et garder premier paragraphe utile
+        if len(p_clean) > max_len:
+            parts = re.split(r'\n{2,}|\. ', p_clean)
+            # garder paragraphe le plus long mais < max_len
+            candidates = [s.strip() for s in parts if 30 < len(s.strip()) < max_len]
+            p_clean = candidates[0] if candidates else p_clean[:max_len]
+        out.append(p_clean.strip())
+    return out
 
 # --- RESUME LOCAL (sans OpenAI) ---
 def summarize_local(question: str, passage: str, out_lang: str = "fr"):
@@ -110,36 +153,45 @@ def summarize_local(question: str, passage: str, out_lang: str = "fr"):
 
 # --- PIPELINE QA MULTILINGUE ---
 def qa_multilang(user_question):
-    try:
-        lang_detected = detect(user_question)
-    except Exception:
-        lang_detected = "unknown"
-
-    if lang_detected == "unknown":
-        return "Impossible de détecter la langue, veuillez reformuler.", lang_detected
-
-    # Traduction en albanais
-    if lang_detected != "sq":
-        try:
-            question_albanian = GoogleTranslator(source='auto', target='sq').translate(user_question)
-        except Exception:
-            return "Erreur lors de la traduction de la question.", lang_detected
+        # 1. détection langue
+    lang = safe_detect(user_question)
+    # 2. traduction en albanais si ton tafsir est en albanais (adaptable)
+    # ici on suppose tafsir_data est en albanais (sq), si non adapter.
+    if lang != "sq":
+        question_for_search = translate_text(user_question, "sq", src=lang)
     else:
-        question_albanian = user_question
+        question_for_search = user_question
 
-    # Recherche vectorielle top_k=10
-    results = search_tafsir(question_albanian, top_k=10)
-    passages = [r['tafsir'] for r in results if isinstance(r['tafsir'], str) and r['tafsir'].strip()]
-    if not passages:
-        return "Aucune réponse trouvée.", lang_detected
+    # 3. recherche initiale (top_k)
+    initial = search_tafsir(question_for_search, top_k=10)
+    if not initial:
+        return "Aucune réponse trouvée dans la base tafsir."
 
-    # Reranker
-    ranked = rerank_results(question_albanian, passages)
-    best_passages = [p[0] for p in ranked[:3]]
-    combined = " ".join(best_passages)
+    # collect passages
+    passages = [r['tafsir'] for r in initial if isinstance(r.get('tafsir', ""), str)]
+
+    # 4. rerank (utilise question_for_search - en albanais)
+    ranked = rerank_results(question_for_search, passages)
+
+    # 5. filtrage anti-bruit
+    filtered = filter_passages(ranked, min_len=60, max_len=1500)
+    if not filtered:
+        return "Aucune réponse utile après filtrage."
+
+    # 6. prendre top passage(s)
+    top_passage = filtered[0]
+    # si tu veux, combiner top 2 ou 3 :
+    # top_passage = " ".join(filtered[:3])
+
 
     # Résumé local
     summarized = summarize_local(question_albanian, combined, lang_detected)
+    # 8. final polishing (reformulation fluide si besoin)
+    polished = reformulate_local(summarized, target_lang)
+
+    # 9. retourner
+    return polished
+
 
     # Traduction vers langue originale si nécessaire
     if lang_detected != "sq":
