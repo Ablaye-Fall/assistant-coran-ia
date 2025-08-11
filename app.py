@@ -286,7 +286,7 @@ user_q = st.text_input("💬 Posez votre question :")
 if st.button("Envoyer"):
     if user_q.strip():
         with st.spinner("Recherche de la réponse..."):
-            answer, lang_used = qa_multilang(user_q)
+            answer, lang_used = qa_pipeline(user_q)
         st.session_state.history.append({"question": user_q, "answer": answer})
         st.rerun()
     else:
