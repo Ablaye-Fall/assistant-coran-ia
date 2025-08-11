@@ -21,9 +21,9 @@ def nettoyer_html(texte: str) -> str:
     texte = re.sub(r'\s+', ' ', texte)
     return texte.strip()
 
-def reformulate_local(text: str, target_lang: str) -> str:
+def reformulate_text(text: str, target_lang: str) -> str:
     """
-    Fallback local "reformulation" using double translation to smooth style.
+    Reformulation simple via double traduction pour adoucir le style.
     """
     try:
         en = GoogleTranslator(source='auto', target='en').translate(text)
@@ -100,34 +100,25 @@ def search_tafsir(query_albanian, top_k=10):
 
 # --- RERANKER ---
 def rerank_results(question: str, passages: list):
-    """
-    passages: list[str]
-    retourne: list[str] triés par score décroissant
-    """
     if not passages:
         return []
     pairs = [(question, p) for p in passages]
     try:
         scores = reranker.predict(pairs)
     except Exception:
-        # si reranker échoue, renvoie passages originaux
         return passages
     ranked = sorted(zip(passages, scores), key=lambda x: x[1], reverse=True)
     return [p for p, s in ranked]
-# -------------------------
-# FILTRAGE / CLEAN
-# -------------------------
+
+# --- CLEAN PASSAGES ---
 def filter_passages(passages, min_len=50, max_len=1500):
     out = []
     for p in passages:
         p_clean = nettoyer_html(p)
-        # supprimer courts snippets non informatifs
         if len(p_clean) < min_len:
             continue
-        # couper très long en paragraphes et garder premier paragraphe utile
         if len(p_clean) > max_len:
             parts = re.split(r'\n{2,}|\. ', p_clean)
-            # garder paragraphe le plus long mais < max_len
             candidates = [s.strip() for s in parts if 30 < len(s.strip()) < max_len]
             p_clean = candidates[0] if candidates else p_clean[:max_len]
         out.append(p_clean.strip())
@@ -152,7 +143,7 @@ def qa_multilang(user_question):
     else:
         question_albanian = user_question
 
-    # Recherche vectorielle top_k=10
+    # Recherche vectorielle
     results = search_tafsir(question_albanian, top_k=10)
     passages = [r['tafsir'] for r in results if isinstance(r['tafsir'], str) and r['tafsir'].strip()]
     if not passages:
@@ -160,7 +151,7 @@ def qa_multilang(user_question):
 
     # Reranker
     ranked = rerank_results(question_albanian, passages)
-    best_passages = [p[0] for p in ranked[:3]]
+    best_passages = ranked[:3]  # ✅ Correction : pas de p[0]
     combined = " ".join(best_passages)
 
     # Traduction vers langue originale
@@ -175,17 +166,6 @@ def qa_multilang(user_question):
     # Reformuler
     answer_refined = reformulate_text(answer_translated, lang_detected)
     return answer_refined, lang_detected
-
-    # Traduction vers langue originale si nécessaire
-    if lang_detected != "sq":
-        try:
-            answer_translated = GoogleTranslator(source='sq', target=lang_detected).translate(summarized)
-        except Exception:
-            answer_translated = summarized
-    else:
-        answer_translated = summarized
-
-    return answer_translated, lang_detected
 
 # --- INTERFACE STREAMLIT ---
 st.set_page_config(page_title="Assistant Coran IA", page_icon="📖", layout="centered")
@@ -220,7 +200,7 @@ verset_num = st.number_input("📌 Choisissez un verset :", min_value=1, max_val
 verset_ar = verses_ar[verset_num - 1]["text"] if verses_ar else ""
 verset_trad = verses_trad[verset_num - 1]["text"] if verses_trad else ""
 
-# Affichage verset + traduction avec zoom
+# Affichage verset + zoom
 zoom = st.slider("🔍 Zoom texte arabe", min_value=1.0, max_value=3.0, value=1.5, step=0.1)
 st.markdown(f"<p style='font-size:{zoom}em; direction:rtl; text-align:right; font-weight:bold;'>{verset_ar}</p>", unsafe_allow_html=True)
 st.subheader(f"🌍 Traduction ({traduction_choisie})")
@@ -249,7 +229,7 @@ traduction_tafsir = GoogleTranslator(source='auto', target=lang_tafsir).translat
 st.subheader("📜 Tafsir")
 st.write(traduction_tafsir)
 
-# Audio tafsir gTTS
+# Audio tafsir
 tts_langs = ["fr", "en", "ar", "es"]
 if lang_tafsir in tts_langs and traduction_tafsir:
     try:
@@ -260,19 +240,17 @@ if lang_tafsir in tts_langs and traduction_tafsir:
     except Exception as e:
         st.warning(f"Audio tafsir non disponible : {e}")
 
-# Q&A multilingue avec tafsir complet
+# Q&A multilingue
 st.markdown("---")
 st.subheader("❓ Posez une question au sujet du Coran (toutes langues)")
 
 if "history" not in st.session_state:
     st.session_state.history = []
 
-# Affichage historique
 for chat in st.session_state.history:
     st.markdown(f"**🧑‍💻 Vous :** {chat['question']}")
     st.markdown(f"**🤖 Assistant :** {chat['answer']}")
 
-# Champ saisie question
 user_q = st.text_input("💬 Posez votre question :")
 
 if st.button("Envoyer"):
@@ -280,7 +258,7 @@ if st.button("Envoyer"):
         with st.spinner("Recherche de la réponse..."):
             answer, lang_used = qa_multilang(user_q)
         st.session_state.history.append({"question": user_q, "answer": answer})
-        st.rerun()
+        st.experimental_rerun()
     else:
         st.warning("Veuillez entrer une question.")
 
