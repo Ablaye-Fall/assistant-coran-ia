@@ -166,8 +166,7 @@ def qa_pipeline(user_question: str):
 
     question_sq = marian_translate(user_question, lang, "sq")
     q_emb = embedder.encode(question_sq, convert_to_tensor=True)
-
-    corpus_texts = [tk.get("tafsir", "") for tk in tafsir_keys]
+    corpus_texts = [tafsir_data[tk].get("tafsir", "") for tk in tafsir_keys]
     corpus_embeddings = tafsir_embeddings
 
     if not corpus_texts or corpus_embeddings is None:
