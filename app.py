@@ -281,7 +281,7 @@ if st.button("Envoyer", key="btn_envoyer"):
         with st.spinner("Recherche de la réponse..."):
             answer, lang_used = qa_multilang(user_q)
         st.session_state.history.append({"question": user_q, "answer": answer})
-        st.experimental_rerun()
+        st.rerun()
     else:
         st.warning("Veuillez entrer une question.")
 
