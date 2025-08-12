@@ -229,7 +229,7 @@ def qa_pipeline(user_question: str):
     q_emb = embedder.encode(question_sq, convert_to_tensor=True)
 
     # prepare corpus_texts and embeddings from tafsir_keys (we expect tafsir_keys to be list of dicts with 'tafsir')
-    corpus_texts = [tk.get("tafsir", "") for tk in tafsir_keys] if tafsir_keys else []
+    corpus_texts = [tafsir_data[tk].get("tafsir", "") for tk in tafsir_keys] if tafsir_keys else []
     corpus_embeddings = tafsir_embeddings if tafsir_embeddings is not None else None
 
     if not corpus_texts or corpus_embeddings is None:
