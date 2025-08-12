@@ -9,8 +9,7 @@ import tempfile
 from langdetect import detect, DetectorFactory
 
 # ML libs
-from sentence_transformers import SentenceTransformer, util
-from cross_encoder import CrossEncoder  # if installed as separate package; otherwise from sentence_transformers import CrossEncoder
+from sentence_transformers import SentenceTransformer, CrossEncoder, util
 from transformers import MarianTokenizer, MarianMTModel, pipeline
 import joblib
 
