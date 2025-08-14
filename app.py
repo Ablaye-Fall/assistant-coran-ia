@@ -28,7 +28,7 @@ def reformulate_text(text, target_lang):
         return text
 
 # ---------------------------
-# --- TOGGLE DIACRITIQUES + ZOOM GLOBAL ---
+# --- TOGGLE DIACRITIQUES + ZOOM GLOBAL (APPLIQUÉ UNIQUEMENT AU VERSET ARABE) ---
 # ---------------------------
 DIACRITICS_RE = re.compile(r'[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]')
 
@@ -36,7 +36,7 @@ def remove_diacritics(text: str) -> str:
     """Supprime les harakât/diacritiques arabes."""
     return DIACRITICS_RE.sub('', text) if text else text
 
-# Sidebar globale pour toggle et zoom
+# Sidebar globale pour toggle et zoom (état global mais usage limité au verset arabe)
 with st.sidebar:
     st.header("Affichage arabe")
     if "hide_harakat" not in st.session_state:
@@ -52,7 +52,8 @@ with st.sidebar:
     )
 
 def render_verset(verset_ar: str, weight: int = 600):
-    """Affiche un verset arabe en appliquant toggle + zoom."""
+    """Affiche un verset arabe en appliquant toggle + zoom.
+       -> UTILISER UNIQUEMENT POUR LE VERSET ARABE."""
     display_text = remove_diacritics(verset_ar) if st.session_state.hide_harakat else verset_ar
     st.markdown(
         f"<p style='font-size:{st.session_state.zoom_em}em; direction:rtl; text-align:right; font-weight:{weight};'>{display_text}</p>",
@@ -213,12 +214,14 @@ verset_num = st.number_input("📌 Choisissez un verset :", min_value=1, max_val
 verset_ar = verses_ar[verset_num - 1]["text"] if verses_ar else ""
 verset_trad = verses_trad[verset_num - 1]["text"] if verses_trad else ""
 
-# 5. Affichage verset + traduction avec toggle + zoom
+# 5. Affichage verset arabe AVEC toggle + zoom (SEULEMENT ICI)
 render_verset(verset_ar, weight=700)
+
+# 6. Traduction (affichée normalement, sans zoom/diacritiques appliqués)
 st.subheader(f"🌍 Traduction ({traduction_choisie})")
 st.write(f"*{verset_trad}*")
 
-# 6. Audio verset
+# 7. Audio verset
 reciters = {
     "🎙 Mishary Rashid Alafasy": "ar.alafasy",
     "🎙 Abdul Basit": "ar.abdulbasitmurattal",
@@ -229,7 +232,7 @@ audio_url = get_audio_ayah(num_surah, verset_num, reciters.get(reciter_choice, "
 if audio_url:
     st.audio(audio_url, format="audio/mp3")
 
-# 7. Affichage Tafsir
+# 8. Affichage Tafsir (AFFICHÉ SANS toggle/zoom)
 cle_verset = f"{num_surah}:{verset_num}"
 tafsir_entry = tafsir_data.get(cle_verset, {})
 tafsir_raw = tafsir_entry.get("text", "") if isinstance(tafsir_entry, dict) else str(tafsir_entry)
@@ -239,7 +242,8 @@ lang_tafsir = st.selectbox("🌐 Langue traduction du tafsir :", ["fr", "en", "a
 traduction_tafsir = GoogleTranslator(source='auto', target=lang_tafsir).translate(tafsir_clean) if tafsir_clean else ""
 
 st.subheader("📜 Tafsir")
-render_verset(traduction_tafsir, weight=500)  # ici aussi toggle + zoom appliqués
+# IMPORTANT: tafsir affiché normalement (pas de render_verset) — tu as demandé le toggle uniquement pour le verset arabe
+st.write(traduction_tafsir)
 
 # Audio tafsir gTTS
 tts_langs = ["fr", "en", "ar", "es"]
@@ -252,7 +256,7 @@ if lang_tafsir in tts_langs and traduction_tafsir:
     except Exception as e:
         st.warning(f"Audio tafsir non disponible : {e}")
 
-# 8. Q&A multilingue avec tafsir complet
+# 9. Q&A multilingue avec tafsir complet
 st.markdown("---")
 st.subheader("❓ Posez une question au sujet du Coran (toutes langues)")
 
@@ -273,7 +277,7 @@ if st.button("Envoyer"):
         with st.spinner("Recherche de la réponse..."):
             answer, lang_used = qa_multilang(user_q)
         st.session_state.history.append({"question": user_q, "answer": answer})
-        st.experimental_rerun()
+        st.rerun()
     else:
         st.warning("Veuillez entrer une question.")
 
