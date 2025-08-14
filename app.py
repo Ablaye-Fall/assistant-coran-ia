@@ -410,36 +410,55 @@ if tafsir_clean:
             st.warning(f"Audio tafsir non disponible : {e}")
 else:
     st.info("Aucun tafsir local trouvé pour ce verset.")
-
-# ---------------- Q&A ----------------
+# ---------------- Q&A (Remplacement robuste) ----------------
 st.markdown("---")
 st.subheader("❓ Q&A multilingue")
 
 if "history" not in st.session_state:
-    st.session_state.history = []
+    st.session_state.history = []  # liste de dicts {"q":..., "a":..., "lang":...}
 
-user_q = st.text_input("💬 Pose ta question :", key="q_in")
-if st.button("Envoyer"):
+# Utiliser un formulaire pour stabiliser la soumission
+with st.form(key="qa_form", clear_on_submit=False):
+    user_q = st.text_input("💬 Pose ta question :", key="q_in_form")
+    submit = st.form_submit_button("Envoyer")
+
+if submit:
     if user_q and user_q.strip():
         with st.spinner("Recherche..."):
-            answer, lang_detected = qa_pipeline(user_q.strip())
+            try:
+                answer, lang_detected = qa_pipeline(user_q.strip())
+            except Exception as e:
+                # log côté serveur, retourne un message utilisateur propre
+                st.error("Erreur lors du traitement de la question (voir logs serveur).")
+                # optionnel : st.exception(e)
+                answer, lang_detected = "Erreur interne.", "unknown"
+
+        # Insérer en tête, sans utiliser st.rerun()
         st.session_state.history.insert(0, {"q": user_q.strip(), "a": answer, "lang": lang_detected})
     else:
         st.warning("Veuillez saisir une question.")
 
-for chat in st.session_state.history:
-    st.markdown(f"**🧑‍💻 Vous ({chat['lang']}):** {chat['q']}")
-    st.markdown(f"**🤖 Réponse :** {chat['a']}")
-    if _GTTS_AVAILABLE and isinstance(chat.get('a'), str) and len(chat['a']) > 0:
+# Affichage de l'historique — chaque item a une key stable basée sur son index
+for idx, chat in enumerate(st.session_state.history):
+    q_text = chat.get("q", "")
+    a_text = chat.get("a", "")
+    lang = chat.get("lang", "unknown")
+
+    st.markdown(f"**🧑‍💻 Vous ({lang}):** {q_text}")
+    st.markdown(f"**🤖 Réponse :** {a_text}")
+
+    # Container audio dédié et clé stable
+    audio_container = st.container()
+    if _GTTS_AVAILABLE and isinstance(a_text, str) and len(a_text) > 0:
         try:
-            tts_lang = chat['lang'] if chat['lang'] in ['fr', 'en', 'es', 'ar'] else 'fr'
-            tts = gTTS(chat['a'], lang=tts_lang)
+            tts_lang = lang if lang in ['fr', 'en', 'es', 'ar'] else 'fr'
+            tts = gTTS(a_text, lang=tts_lang)
             bio = BytesIO()
             tts.write_to_fp(bio)
-            st.audio(bio.getvalue())
-        except Exception:
-            pass
-
-if st.button("🗑 Effacer l'historique"):
-    st.session_state.history.clear()
-    st.success("Historique vidé.")
+            bio.seek(0)
+            # Affiche dans le container (clé stable via index)
+            audio_container.audio(bio.read(), format="audio/mp3")
+        except Exception as e:
+            # n'affiche pas d'élément audio en cas d'erreur; log si nécessaire
+            audio_container.info("Lecture audio non disponible pour cette réponse.")
+            # optionnel: st.write("Debug:", e)
