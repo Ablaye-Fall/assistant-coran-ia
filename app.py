@@ -1,4 +1,4 @@
-# app_final.py — Qalam-Quran-AI Optimisé (sans joblib)
+# app_final.py — Qalam-Quran-AI Optimisé (stable DOM, sans joblib)
 import streamlit as st
 import json
 import re
@@ -10,20 +10,20 @@ from sentence_transformers import SentenceTransformer, CrossEncoder, util
 from transformers import MarianTokenizer, MarianMTModel, pipeline
 import numpy as np
 
-# --------- Modules optionnels ----------
+# Optional modules
 try:
     import language_tool_python
     _LANG_TOOL_AVAILABLE = True
-except ImportError:
+except Exception:
     _LANG_TOOL_AVAILABLE = False
 
 try:
     from gtts import gTTS
     _GTTS_AVAILABLE = True
-except ImportError:
+except Exception:
     _GTTS_AVAILABLE = False
 
-# --------- Config de base ----------
+# Basic config
 DetectorFactory.seed = 0
 st.set_page_config(page_title="Qalam-Quran-AI (Final)", page_icon="🕋", layout="centered")
 
@@ -51,43 +51,31 @@ def safe_detect(text: str) -> str:
     except Exception:
         return "unknown"
 
-# --- FONTS & ARABIC RENDER (zoom avancé) ---
-def _inject_font_link_once(font_url_key: str, href: str):
-    if "loaded_font_links" not in st.session_state:
-        st.session_state.loaded_font_links = set()
-    if font_url_key not in st.session_state.loaded_font_links:
-        st.markdown(f"<link href='{href}' rel='stylesheet'>", unsafe_allow_html=True)
-        st.session_state.loaded_font_links.add(font_url_key)
+# ---------------- FONT IMPORT (single injection) ----------------
+FONT_IMPORT_CSS = """
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&family=Scheherazade+New:wght@400;700&family=Noto+Naskh+Arabic:wght@400;700&display=swap');
+.arabic-verse {
+    direction: rtl;
+    -webkit-font-smoothing: antialiased;
+    font-variant-ligatures: normal;
+}
+</style>
+"""
+if "fonts_injected" not in st.session_state:
+    st.markdown(FONT_IMPORT_CSS, unsafe_allow_html=True)
+    st.session_state["fonts_injected"] = True
 
+# ---------------- FONT PRESETS ----------------
 FONT_PRESETS = {
-    "Amiri (classique)": (
-        "'Amiri','Scheherazade New','Noto Naskh Arabic',serif",
-        "https://fonts.googleapis.com/css2?family=Amiri:wght@400;700&display=swap",
-        "gf-amiri",
-    ),
-    "Scheherazade New": (
-        "'Scheherazade New','Amiri','Noto Naskh Arabic',serif",
-        "https://fonts.googleapis.com/css2?family=Scheherazade+New:wght@400;700&display=swap",
-        "gf-scheherazade",
-    ),
-    "Noto Naskh Arabic": (
-        "'Noto Naskh Arabic','Amiri','Scheherazade New',serif",
-        "https://fonts.googleapis.com/css2?family=Noto+Naskh+Arabic:wght@400;700&display=swap",
-        "gf-noto-naskh",
-    ),
-    "Noto Kufi Arabic": (
-        "'Noto Kufi Arabic','Noto Naskh Arabic','Amiri',serif",
-        "https://fonts.googleapis.com/css2?family=Noto+Kufi+Arabic:wght@400;700&display=swap",
-        "gf-noto-kufi",
-    ),
-    "Lateef (calligraphie)": (
-        "'Lateef','Scheherazade New','Noto Naskh Arabic',serif",
-        "https://fonts.googleapis.com/css2?family=Lateef:wght@400;700&display=swap",
-        "gf-lateef",
-    ),
+    "Amiri (classique)": ("'Amiri','Scheherazade New','Noto Naskh Arabic',serif"),
+    "Scheherazade New": ("'Scheherazade New','Amiri','Noto Naskh Arabic',serif"),
+    "Noto Naskh Arabic": ("'Noto Naskh Arabic','Amiri','Scheherazade New',serif"),
+    "Noto Kufi Arabic": ("'Noto Kufi Arabic','Noto Naskh Arabic','Amiri',serif"),
+    "Lateef (calligraphie)": ("'Lateef','Scheherazade New','Noto Naskh Arabic',serif"),
 }
 
-# (optionnel) Suppression/affichage des harakât
+# Harakat toggle
 _HARAKAT_RE = re.compile(r"[\u0610-\u061A\u064B-\u065F\u0670\u06D6-\u06ED]")
 def toggle_harakat(txt: str, show: bool) -> str:
     return txt if show else _HARAKAT_RE.sub("", txt)
@@ -184,7 +172,6 @@ def summarize_text(text: str, max_words=150):
         out = summarizer(text, max_length=max_words, min_length=40, do_sample=False)
         return out[0]['summary_text']
     except Exception:
-        # fallback simple
         return " ".join(text.split()[:max_words])
 
 def correct_text_language_tool(text: str, lang_code='fr'):
@@ -204,7 +191,7 @@ def qa_pipeline(user_question: str):
     if lang == "unknown":
         return "Impossible de détecter la langue.", lang
 
-    # Traduire vers le corpus (albanais sq)
+    # Traduire vers le corpus (sq)
     question_sq = marian_translate(user_question, lang, "sq")
     q_emb = embedder.encode(question_sq, convert_to_tensor=True)
 
@@ -219,11 +206,9 @@ def qa_pipeline(user_question: str):
         corpus_texts.append(txt)
 
     corpus_embeddings = tafsir_embeddings
-
     if not corpus_texts or corpus_embeddings is None:
         return "Base de données indisponible.", lang
 
-    # Recherche sémantique + rerank
     scored = semantic_search_and_rerank(question_sq, q_emb, corpus_texts, corpus_embeddings)
     if not scored:
         return "Aucune réponse trouvée.", lang
@@ -232,16 +217,10 @@ def qa_pipeline(user_question: str):
     if best_score < RERANK_THRESHOLD:
         return "Aucune réponse pertinente trouvée.", lang
 
-    # Nettoyage + résumé
     cleaned = nettoyer_html(best_passage)
     summarized = summarize_text(cleaned)
-
-    # Traduire vers la langue utilisateur
     output_in_user_lang = marian_translate(summarized, "sq", lang) if lang != "sq" else summarized
-
-    # Corriger (si fr dispo)
     corrected = correct_text_language_tool(output_in_user_lang, lang_code=lang if lang in ['fr','en','es'] else 'fr')
-
     return corrected, lang
 
 # ---------------- API ALQURAN ----------------
@@ -294,14 +273,11 @@ if verses_data:
     for ed in verses_data:
         ident = (ed.get("edition") or {}).get("identifier", "")
         ed_by_id[ident] = ed
-
     if "quran-simple" in ed_by_id:
         verses_ar = ed_by_id["quran-simple"].get("ayahs", [])
-
     if code_trad in ed_by_id:
         verses_trad = ed_by_id[code_trad].get("ayahs", [])
     else:
-        # petit fallback si l'identifiant diffère légèrement
         for k, v in ed_by_id.items():
             if k.endswith(code_trad.split(".")[-1]):
                 verses_trad = v.get("ayahs", [])
@@ -313,7 +289,16 @@ verset_num = st.number_input("📌 Choisissez un verset :", 1, max_verset if max
 verset_ar = verses_ar[verset_num - 1]["text"] if verses_ar else ""
 verset_trad = verses_trad[verset_num - 1]["text"] if verses_trad else ""
 
-# ----- Options d'affichage avancées du texte arabe -----
+# Préparer tafsir local (texte) — avant placeholders pour pouvoir choisir la langue TTS
+cle = f"{num_surah}:{verset_num}"
+_t = tafsir_data.get(cle, {})
+if isinstance(_t, dict):
+    tafsir_text = _t.get("tafsir") or _t.get("text") or ""
+else:
+    tafsir_text = str(_t) if _t else ""
+tafsir_clean = nettoyer_html(tafsir_text)
+
+# ----- Options d'affichage du texte arabe (UI) -----
 with st.expander("🧰 Options d’affichage du texte arabe", expanded=True):
     col1, col2 = st.columns(2)
     with col1:
@@ -332,45 +317,90 @@ with st.expander("🧰 Options d’affichage du texte arabe", expanded=True):
     with col4:
         show_harakat = st.checkbox("Afficher les harakât (voyelles)", value=True)
 
-# Charger la police choisie (Google Fonts)
-font_stack, font_href, font_key = FONT_PRESETS[font_label]
-_inject_font_link_once(font_key, font_href)
+# Choix langue tafsir (avant affichage)
+st.subheader("📜 Tafsir (local)")
+lang_tafsir_view = st.selectbox("🌐 Voir le tafsir en :", ["fr", "en", "ar", "es"])
+if tafsir_clean:
+    src_lang = safe_detect(tafsir_clean)
+    try:
+        tafsir_trans = marian_translate(tafsir_clean, src_lang, lang_tafsir_view)
+    except Exception:
+        tafsir_trans = tafsir_clean
+else:
+    tafsir_trans = ""
 
-# Rendu du verset (avec ou sans harakât)
+# ---------------- Stable placeholders for verse / translation / tafsir ----------------
+if "placeholders_created" not in st.session_state:
+    st.session_state["ph_verse"] = st.empty()
+    st.session_state["ph_trad"] = st.empty()
+    st.session_state["ph_tafsir"] = st.empty()
+    st.session_state["ph_tafsir_audio"] = st.empty()
+    st.session_state["placeholders_created"] = True
+
+ph_verse = st.session_state["ph_verse"]
+ph_trad = st.session_state["ph_trad"]
+ph_tafsir = st.session_state["ph_tafsir"]
+ph_tafsir_audio = st.session_state["ph_tafsir_audio"]
+
+# Prepare verse display values
+font_stack = FONT_PRESETS.get(font_label, FONT_PRESETS["Noto Naskh Arabic"])
 verset_ar_display = toggle_harakat(verset_ar or "", show_harakat)
-text_shadow_css = "text-shadow: 0 1px 1px rgba(0,0,0,.25);" if show_shadow else "text-shadow: none;"
+text_shadow_css = "text-shadow: 0 1px 1px rgba(0,0,0,.25);" if show_shadow else ""
 
-st.markdown(
-    f"""
-    <div style="
-        direction: rtl;
-        text-align: {align};
-        font-family: {font_stack};
-        font-size: {font_size}px;
-        line-height: {line_height}em;
-        color: {text_color};
-        background: {bg_color};
-        padding: 16px 20px;
-        border-radius: 16px;
-        box-shadow: 0 2px 10px rgba(0,0,0,.05);
-        letter-spacing: {letter_spacing}px;
-        word-spacing: {word_spacing}px;
-        font-variant-ligatures: normal;
-        -webkit-font-smoothing: antialiased;
-        {text_shadow_css}
-        font-weight: 600;
-    ">
-        {verset_ar_display}
-    </div>
-    """,
-    unsafe_allow_html=True
-)
+verse_html = f"""
+<div class="arabic-verse" style="
+    text-align:{align};
+    font-family:{font_stack};
+    font-size:{font_size}px;
+    line-height:{line_height}em;
+    color:{text_color};
+    background:{bg_color};
+    padding:16px 20px;
+    border-radius:12px;
+    letter-spacing:{letter_spacing}px;
+    word-spacing:{word_spacing}px;
+    {text_shadow_css}
+    font-weight:600;
+">
+{verset_ar_display}
+</div>
+"""
 
-# Traduction choisie
-st.subheader(f"🌍 Traduction — {traduction_choisie}")
-st.write(f"*{verset_trad}*")
+# Render verse (safe)
+try:
+    ph_verse.markdown(verse_html, unsafe_allow_html=True)
+except Exception:
+    ph_verse.write(verset_ar_display)
 
-# Audio du verset
+# Render translation
+ph_trad.write(f"*{verset_trad}*")
+
+# Render tafsir text and audio (in dedicated stable placeholders)
+if tafsir_clean:
+    try:
+        ph_tafsir.write(tafsir_trans)
+    except Exception:
+        ph_tafsir.write(tafsir_clean)
+
+    # Clear previous audio then set new audio if available
+    ph_tafsir_audio.empty()
+    if _GTTS_AVAILABLE and isinstance(tafsir_trans, str) and len(tafsir_trans) > 0:
+        try:
+            tts_lang = lang_tafsir_view if lang_tafsir_view in ['fr', 'en', 'es', 'ar'] else 'fr'
+            tts = gTTS(tafsir_trans, lang=tts_lang)
+            bio = BytesIO()
+            tts.write_to_fp(bio)
+            bio.seek(0)
+            ph_tafsir_audio.audio(bio.read(), format="audio/mp3")
+        except Exception as e:
+            ph_tafsir_audio.info("Lecture audio non disponible pour le tafsir.")
+            # log for dev
+            st.exception(e)
+else:
+    ph_tafsir.info("Aucun tafsir local trouvé pour ce verset.")
+    ph_tafsir_audio.empty()
+
+# Audio du verset (récitateur)
 reciters = {
     "🎙 Mishary Rashid Alafasy": "ar.alafasy",
     "🎙 Abdul Basit": "ar.abdulbasitmurattal",
@@ -379,47 +409,24 @@ reciters = {
 reciter_choice = st.selectbox("🎧 Choisissez un récitateur :", list(reciters.keys()))
 audio_url = get_ayah_audio(num_surah, verset_num, reciters.get(reciter_choice, "ar.alafasy"))
 if audio_url:
-    st.audio(audio_url)
-# Tafsir local
-cle = f"{num_surah}:{verset_num}"
-_t = tafsir_data.get(cle, {})
-if isinstance(_t, dict):
-    tafsir_text = _t.get("tafsir") or _t.get("text") or ""
-else:
-    tafsir_text = str(_t) if _t else ""
+    try:
+        st.audio(audio_url)
+    except Exception:
+        # fallback silent
+        st.info("Audio verset indisponible.")
 
-tafsir_clean = nettoyer_html(tafsir_text)
-st.subheader("📜 Tafsir (local)")
-if tafsir_clean:
-    lang_tafsir_view = st.selectbox("🌐 Voir le tafsir en :", ["fr", "en", "ar", "es"])
-    src_lang = safe_detect(tafsir_clean)
-    tafsir_trans = marian_translate(tafsir_clean, src_lang, lang_tafsir_view)
-    st.write(tafsir_trans)
-
-    # --- Audio tafsir (TTS en mémoire) ---
-    if _GTTS_AVAILABLE and isinstance(tafsir_trans, str) and len(tafsir_trans) > 0:
-        try:
-            # choisir la langue TTS à partir du sélecteur (fallback 'fr')
-            tts_lang = lang_tafsir_view if lang_tafsir_view in ['fr', 'en', 'es', 'ar'] else 'fr'
-            tts = gTTS(tafsir_trans, lang=tts_lang)
-            bio = BytesIO()
-            tts.write_to_fp(bio)
-            bio.seek(0)
-            st.audio(bio.read(), format="audio/mp3")
-        except Exception as e:
-            st.warning(f"Audio tafsir non disponible : {e}")
-else:
-    st.info("Aucun tafsir local trouvé pour ce verset.")
-# ---------------- Q&A (Remplacement robuste) ----------------
+# ---------------- Q&A (robust with placeholders & form) ----------------
 st.markdown("---")
 st.subheader("❓ Q&A multilingue")
 
 if "history" not in st.session_state:
-    st.session_state.history = []  # liste de dicts {"q":..., "a":..., "lang":...}
+    st.session_state.history = []
 
-# Utiliser un formulaire pour stabiliser la soumission
-with st.form(key="qa_form", clear_on_submit=False):
-    user_q = st.text_input("💬 Pose ta question :", key="q_in_form")
+if "ph_qa_list" not in st.session_state:
+    st.session_state["ph_qa_list"] = st.empty()
+
+with st.form(key="qa_form_v2", clear_on_submit=False):
+    user_q = st.text_input("💬 Pose ta question :", key="q_in_form_v2")
     submit = st.form_submit_button("Envoyer")
 
 if submit:
@@ -428,37 +435,36 @@ if submit:
             try:
                 answer, lang_detected = qa_pipeline(user_q.strip())
             except Exception as e:
-                # log côté serveur, retourne un message utilisateur propre
-                st.error("Erreur lors du traitement de la question (voir logs serveur).")
-                # optionnel : st.exception(e)
+                st.error("Erreur lors du traitement de la question.")
+                st.exception(e)
                 answer, lang_detected = "Erreur interne.", "unknown"
-
-        # Insérer en tête, sans utiliser st.rerun()
         st.session_state.history.insert(0, {"q": user_q.strip(), "a": answer, "lang": lang_detected})
     else:
         st.warning("Veuillez saisir une question.")
 
-# Affichage de l'historique — chaque item a une key stable basée sur son index
-for idx, chat in enumerate(st.session_state.history):
-    q_text = chat.get("q", "")
-    a_text = chat.get("a", "")
-    lang = chat.get("lang", "unknown")
+# Render history atomically in the placeholder container
+ph_list = st.session_state["ph_qa_list"]
+with ph_list.container():
+    for idx, chat in enumerate(st.session_state.history):
+        q_text = chat.get("q", "")
+        a_text = chat.get("a", "")
+        lang = chat.get("lang", "unknown")
+        st.markdown(f"**🧑‍💻 Vous ({lang}):** {q_text}")
+        st.markdown(f"**🤖 Réponse :** {a_text}")
 
-    st.markdown(f"**🧑‍💻 Vous ({lang}):** {q_text}")
-    st.markdown(f"**🤖 Réponse :** {a_text}")
+        # TTS for each answer if available
+        if _GTTS_AVAILABLE and isinstance(a_text, str) and len(a_text) > 0:
+            try:
+                tts_lang = lang if lang in ['fr', 'en', 'es', 'ar'] else 'fr'
+                tts = gTTS(a_text, lang=tts_lang)
+                bio = BytesIO()
+                tts.write_to_fp(bio)
+                bio.seek(0)
+                st.audio(bio.read(), format="audio/mp3")
+            except Exception:
+                st.info("Lecture audio non disponible pour cette réponse.")
 
-    # Container audio dédié et clé stable
-    audio_container = st.container()
-    if _GTTS_AVAILABLE and isinstance(a_text, str) and len(a_text) > 0:
-        try:
-            tts_lang = lang if lang in ['fr', 'en', 'es', 'ar'] else 'fr'
-            tts = gTTS(a_text, lang=tts_lang)
-            bio = BytesIO()
-            tts.write_to_fp(bio)
-            bio.seek(0)
-            # Affiche dans le container (clé stable via index)
-            audio_container.audio(bio.read(), format="audio/mp3")
-        except Exception as e:
-            # n'affiche pas d'élément audio en cas d'erreur; log si nécessaire
-            audio_container.info("Lecture audio non disponible pour cette réponse.")
-            # optionnel: st.write("Debug:", e)
+if st.button("🗑 Effacer l'historique"):
+    st.session_state.history.clear()
+    st.success("Historique vidé.")
+
