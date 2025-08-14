@@ -380,7 +380,6 @@ reciter_choice = st.selectbox("🎧 Choisissez un récitateur :", list(reciters.
 audio_url = get_ayah_audio(num_surah, verset_num, reciters.get(reciter_choice, "ar.alafasy"))
 if audio_url:
     st.audio(audio_url)
-
 # Tafsir local
 cle = f"{num_surah}:{verset_num}"
 _t = tafsir_data.get(cle, {})
@@ -396,6 +395,19 @@ if tafsir_clean:
     src_lang = safe_detect(tafsir_clean)
     tafsir_trans = marian_translate(tafsir_clean, src_lang, lang_tafsir_view)
     st.write(tafsir_trans)
+
+    # --- Audio tafsir (TTS en mémoire) ---
+    if _GTTS_AVAILABLE and isinstance(tafsir_trans, str) and len(tafsir_trans) > 0:
+        try:
+            # choisir la langue TTS à partir du sélecteur (fallback 'fr')
+            tts_lang = lang_tafsir_view if lang_tafsir_view in ['fr', 'en', 'es', 'ar'] else 'fr'
+            tts = gTTS(tafsir_trans, lang=tts_lang)
+            bio = BytesIO()
+            tts.write_to_fp(bio)
+            bio.seek(0)
+            st.audio(bio.read(), format="audio/mp3")
+        except Exception as e:
+            st.warning(f"Audio tafsir non disponible : {e}")
 else:
     st.info("Aucun tafsir local trouvé pour ce verset.")
 
