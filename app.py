@@ -1,7 +1,7 @@
+# app.py (version corrigée)
 import json
 import io
 import re
-import tempfile
 import logging
 import numpy as np
 import streamlit as st
@@ -34,14 +34,15 @@ def nettoyer_html(texte):
     texte = re.sub(r'<b><i>.*?</i></b>', '', texte, flags=re.DOTALL)
     return re.sub(r'<[^>]+>', '', texte)
 
-def safe_translate(text, target):
-    """Traduction avec catch des exceptions."""
+def safe_translate(text, src='auto', target='en'):
+    """Traduction avec catch des exceptions (deep_translator)."""
     if not text:
         return ""
     try:
-        return GoogleTranslator(source='auto', target=target).translate(text)
+        # si la source est 'auto', deep_translator déduit elle-même
+        return GoogleTranslator(source=src, target=target).translate(text)
     except Exception as e:
-        logging.warning(f"Traduction échouée vers {target} : {e}")
+        logging.warning(f"Traduction échouée {src}->{target} : {e}")
         return text
 
 def reformulate_text(text, target_lang):
@@ -49,8 +50,8 @@ def reformulate_text(text, target_lang):
     if not text:
         return ""
     try:
-        temp_en = GoogleTranslator(source='auto', target='en').translate(text)
-        refined = GoogleTranslator(source='en', target=target_lang).translate(temp_en)
+        temp_en = safe_translate(text, src='auto', target='en')
+        refined = safe_translate(temp_en, src='en', target=target_lang)
         return refined
     except Exception as e:
         logging.info(f"Reformulation échouée : {e}")
@@ -87,8 +88,6 @@ with st.sidebar:
     )
 
 def render_verset(verset_ar: str, weight: int = 600):
-    """Affiche un verset arabe en appliquant toggle + zoom.
-       -> UTILISER UNIQUEMENT POUR LE VERSET ARABE."""
     display_text = remove_diacritics(verset_ar) if st.session_state.hide_harakat else verset_ar
     if not display_text:
         st.write("")  # rien à afficher
@@ -125,9 +124,10 @@ def load_tafsir_resources():
         embeddings = np.zeros((0, 384))  # fallback
 
     nn_index = None
-    if embeddings.size > 0:
+    if embeddings.size > 0 and embeddings.shape[0] > 0:
         try:
-            nn_index = NearestNeighbors(n_neighbors=10, metric='cosine')
+            n_neighbors = min(10, embeddings.shape[0])
+            nn_index = NearestNeighbors(n_neighbors=n_neighbors, metric='cosine')
             nn_index.fit(embeddings)
         except Exception as e:
             logging.error(f"Erreur création index NearestNeighbors : {e}")
@@ -162,10 +162,6 @@ def get_surahs():
 
 @st.cache_data(ttl=86400)
 def get_verses(surah_num, translation_code="en.asad"):
-    """
-    Récupère éditions pour une sourate et retourne la liste d'éditions (le format varie parfois).
-    On renverra une liste d'éditions (chaque édition possède "edition" et "ayahs").
-    """
     try:
         url = f"http://api.alquran.cloud/v1/surah/{surah_num}/editions/quran-simple,{translation_code}"
         r = requests.get(url, timeout=10)
@@ -178,12 +174,10 @@ def get_verses(surah_num, translation_code="en.asad"):
 
 @st.cache_data(ttl=86400)
 def get_audio_ayah(surah_num, ayah_num, reciter="ar.alafasy"):
-    """Retourne l'URL audio si disponible."""
     try:
         r = requests.get(f"http://api.alquran.cloud/v1/ayah/{surah_num}:{ayah_num}/{reciter}", timeout=10)
         r.raise_for_status()
         d = r.json().get("data", {})
-        # la clé audio peut être dans data ou data['audio']
         if isinstance(d, dict):
             return d.get("audio") or d.get("Audio") or None
         return None
@@ -196,15 +190,23 @@ def get_audio_ayah(surah_num, ayah_num, reciter="ar.alafasy"):
 # ---------------------------
 def search_tafsir(query_translated, top_k=10):
     """
-    Recherche par nearest neighbours dans les embeddings du tafsir.
-    query_translated est déjà la question traduite dans la langue des embeddings (ici SQ selon ton dataset).
+    Recherche par NearestNeighbors dans les embeddings (tafsir albanais).
+    query_translated doit être en albanais (sq).
     """
     if tafsir_index is None or len(tafsir_keys) == 0:
+        logging.info("Index ou clés tafsir non disponibles.")
         return []
 
     try:
         query_embed = model.encode([query_translated], convert_to_tensor=False)
-        distances, indices = tafsir_index.kneighbors(query_embed, n_neighbors=min(top_k, len(tafsir_keys)))
+    except Exception as e:
+        logging.error(f"Erreur encoding query: {e}")
+        return []
+
+    try:
+        # Ensure n_neighbors <= n_samples
+        n_neighbors = min(top_k, tafsir_embeddings.shape[0], tafsir_index.n_neighbors)
+        distances, indices = tafsir_index.kneighbors(query_embed, n_neighbors=n_neighbors)
     except Exception as e:
         logging.error(f"search_tafsir error (kneighbors): {e}")
         return []
@@ -232,34 +234,35 @@ def rerank_results(question, passages):
     try:
         pairs = [(question, p) for p in passages]
         scores = reranker.predict(pairs)
-        # normalisation 0..1
+        scores = np.array(scores, dtype=float)
         min_s, max_s = float(np.min(scores)), float(np.max(scores))
         if max_s - min_s > 1e-9:
             norm_scores = (scores - min_s) / (max_s - min_s)
         else:
             norm_scores = np.ones_like(scores)
-        ranked = sorted(zip(passages, norm_scores), key=lambda x: x[1], reverse=True)
-        return ranked
+        ranked = sorted(zip(passages, norm_scores.tolist()), key=lambda x: x[1], reverse=True)
+        return ranked  # [(passage, score), ...]
     except Exception as e:
         logging.error(f"rerank_results error: {e}")
-        # fallback : retourner passages sans score
         return [(p, 0.0) for p in passages]
 
 # ---------------------------
 # --- PIPELINE QA MULTILINGUE ---
 # ---------------------------
 def qa_multilang(user_question):
-    """Pipeline : détecte la langue, traduit si besoin, recherche, rerank, retraduit et reformule."""
+    """Pipeline : détecte la langue, traduit en albanais, recherche, rerank, retraduit et reformule."""
     lang_detected = detect_language_safe(user_question)
 
     if lang_detected == "unknown":
         return "Impossible de détecter la langue, veuillez reformuler.", lang_detected
 
-    # -> traduire dans la langue de ton tafsir embeddings (ici je garde la logique d'origine : sq)
-    target_embedding_lang = "sq"
+    target_embedding_lang = "sq"  # tafsir en albanais
+
+    # Traduire la question vers l'albanais (si nécessaire)
     if lang_detected != target_embedding_lang:
         try:
-            question_translated = GoogleTranslator(source='auto', target=target_embedding_lang).translate(user_question)
+            # préciser la source améliore la fiabilité
+            question_translated = safe_translate(user_question, src=lang_detected, target=target_embedding_lang)
         except Exception as e:
             logging.warning(f"Traduction vers {target_embedding_lang} échouée : {e}")
             return "Erreur lors de la traduction de la question.", lang_detected
@@ -270,24 +273,25 @@ def qa_multilang(user_question):
     results = search_tafsir(question_translated, top_k=10)
     passages = [r['tafsir'] for r in results if isinstance(r['tafsir'], str) and r['tafsir'].strip()]
     if not passages:
-        return "Aucune réponse trouvée.", lang_detected
+        return "Aucune réponse trouvée dans le tafsir albanais.", lang_detected
 
-    # Rerank (on reranker le texte dans la langue des passages)
+    # Rerank (on reranker le texte en albanais; on passe la question traduite)
     ranked = rerank_results(question_translated, passages)
-    best_passages = [p[0] for p in ranked[:3]]  # on prend top 3
+    # ranked = [(passage, score), ...]
+    best_passages = [p for p, s in ranked[:3]]
     combined = " ".join(best_passages)
 
-    # Retraduire la réponse dans la langue originale de l'utilisateur si nécessaire
+    # Retraduire la réponse dans la langue originale si besoin
     if lang_detected != target_embedding_lang:
         try:
-            answer_translated = GoogleTranslator(source=target_embedding_lang, target=lang_detected).translate(combined)
+            answer_translated = safe_translate(combined, src=target_embedding_lang, target=lang_detected)
         except Exception as e:
             logging.warning(f"Retraduction échouée : {e}")
             answer_translated = combined
     else:
         answer_translated = combined
 
-    # Reformule légèrement pour fluidité
+    # Reformulation légère pour fluidité (optionnel)
     answer_refined = reformulate_text(answer_translated, lang_detected)
     return answer_refined, lang_detected
 
@@ -320,15 +324,13 @@ translations = {
 traduction_choisie = st.selectbox("🌐 Choisissez une traduction :", list(translations.keys()))
 code_trad = translations.get(traduction_choisie, "en.asad")
 
-# 3. Récupération versets (gestion robuste de l'ordre des éditions)
+# 3. Récupération versets
 verses_data = get_verses(num_surah, code_trad)
 arabic_edition = None
 trans_edition = None
 if isinstance(verses_data, list) and len(verses_data) > 0:
-    # edition identifier pour quran-simple (arabe simple), et pour code_trad
     arabic_edition = next((d for d in verses_data if d.get("edition", {}).get("identifier") in ["quran-simple", "quran-simple-qdc", "quran-simple-text"]), None)
     trans_edition = next((d for d in verses_data if d.get("edition", {}).get("identifier") == code_trad), None)
-    # fallback : si non trouvé, utiliser positions 0/1 si présent
     if not arabic_edition and len(verses_data) >= 1:
         arabic_edition = verses_data[0]
     if not trans_edition and len(verses_data) >= 2:
@@ -344,14 +346,12 @@ verset_num = st.number_input("📌 Choisissez un verset :", min_value=1, max_val
 verset_ar = verses_ar[verset_num - 1]["text"] if verses_ar and len(verses_ar) >= verset_num else ""
 verset_trad = verses_trad[verset_num - 1]["text"] if verses_trad and len(verses_trad) >= verset_num else ""
 
-# 5. Affichage verset arabe AVEC toggle + zoom (SEULEMENT ICI)
 render_verset(verset_ar, weight=700)
 
-# 6. Traduction (affichée normalement, sans zoom/diacritiques appliqués)
 st.subheader(f"🌍 Traduction ({traduction_choisie})")
 st.write(f"*{verset_trad}*")
 
-# 7. Audio verset
+# Audio verset
 reciters = {
     "🎙 Mishary Rashid Alafasy": "ar.alafasy",
     "🎙 Abdul Basit": "ar.abdulbasitmurattal",
@@ -365,19 +365,19 @@ if audio_url:
     except Exception as e:
         logging.warning(f"Audio widget error: {e}")
 
-# 8. Affichage Tafsir (AFFICHÉ SANS toggle/zoom)
+# Tafsir affichage
 cle_verset = f"{num_surah}:{verset_num}"
 tafsir_entry = tafsir_data.get(cle_verset, {})
 tafsir_raw = tafsir_entry.get("text", "") if isinstance(tafsir_entry, dict) else str(tafsir_entry or "")
 tafsir_clean = nettoyer_html(tafsir_raw)
 
 lang_tafsir = st.selectbox("🌐 Langue traduction du tafsir :", ["fr", "en", "ar", "es", "wo"])
-traduction_tafsir = safe_translate(tafsir_clean, lang_tafsir) if tafsir_clean else ""
+traduction_tafsir = safe_translate(tafsir_clean, src='auto', target=lang_tafsir) if tafsir_clean else ""
 
 st.subheader("📜 Tafsir")
 st.write(traduction_tafsir)
 
-# Audio tafsir gTTS (en mémoire pour éviter problèmes de fichiers temporaires)
+# Audio tafsir gTTS
 tts_langs = ["fr", "en", "ar", "es"]
 if lang_tafsir in tts_langs and traduction_tafsir:
     try:
@@ -389,33 +389,28 @@ if lang_tafsir in tts_langs and traduction_tafsir:
     except Exception as e:
         st.warning(f"Audio tafsir non disponible : {e}")
 
-# 9. Q&A multilingue avec tafsir complet
+# Q&A multilingue
 st.markdown("---")
 st.subheader("❓ Posez une question au sujet du Coran (toutes langues)")
 
 if "history" not in st.session_state:
     st.session_state.history = []
 
-# Affichage de l'historique (plus lisible)
 for chat in st.session_state.history:
     st.markdown(f"🧑‍💻 **Vous :** {chat['question']}")
     st.info(chat['answer'])
 
-# Champ de saisie
 user_q = st.text_input("💬 Posez votre question :")
 
-# Bouton envoyer
 if st.button("Envoyer"):
     if user_q.strip():
         with st.spinner("Recherche de la réponse..."):
             answer, lang_used = qa_multilang(user_q)
         st.session_state.history.append({"question": user_q, "answer": answer})
-        # rerun pour afficher l'historique mis à jour
         st.rerun()
     else:
         st.warning("Veuillez entrer une question.")
 
-# Bouton pour effacer la conversation
 if st.button("🗑 Effacer la conversation"):
     st.session_state.history = []
     st.success("Conversation réinitialisée.")
