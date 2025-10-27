@@ -28,25 +28,24 @@ def remove_diacritics(text: str) -> str:
     return DIACRITICS_RE.sub('', text) if text else text
 
 def nettoyer_html(texte):
-    """Enlève les balises HTML basiques que l'on trouve parfois dans le tafsir."""
+    """Supprime les balises HTML du texte tafsir."""
     if not texte:
         return ""
     texte = re.sub(r'<b><i>.*?</i></b>', '', texte, flags=re.DOTALL)
     return re.sub(r'<[^>]+>', '', texte)
 
 def safe_translate(text, src='auto', target='en'):
-    """Traduction avec catch des exceptions (deep_translator)."""
+    """Traduction robuste (catch des erreurs)."""
     if not text:
         return ""
     try:
-        # si la source est 'auto', deep_translator déduit elle-même
         return GoogleTranslator(source=src, target=target).translate(text)
     except Exception as e:
-        logging.warning(f"Traduction échouée {src}->{target} : {e}")
+        logging.warning(f"[Traduction] {src}->{target} échouée : {e}")
         return text
 
 def reformulate_text(text, target_lang):
-    """Double traduction pour reformulation (fallback -> renvoie texte original si erreur)."""
+    """Double traduction pour fluidité."""
     if not text:
         return ""
     try:
@@ -54,43 +53,50 @@ def reformulate_text(text, target_lang):
         refined = safe_translate(temp_en, src='en', target=target_lang)
         return refined
     except Exception as e:
-        logging.info(f"Reformulation échouée : {e}")
+        logging.info(f"[Reformulation] échouée : {e}")
         return text
 
 def detect_language_safe(text):
-    """Détection de langue robuste : priorise la présence d'alphabets (ex : arabe)."""
+    """Détecte la langue, même si caractères arabes."""
     if not text or not text.strip():
         return "unknown"
-    # Si du texte contient des caractères arabes, renvoie 'ar'
     if re.search(r'[\u0600-\u06FF]', text):
         return "ar"
     try:
-        lang = detect(text)
+        return detect(text)
     except Exception:
-        lang = "unknown"
-    return lang
+        return "unknown"
+
+def _limit_text(text, max_chars=1200, max_sentences=6):
+    """Nettoie et limite le texte."""
+    if not text:
+        return ""
+    t = re.sub(r"<[^>]+>", "", text)
+    sents = re.split(r'(?<=[.!?])\s+', t)
+    limited = " ".join(sents[:max_sentences]).strip()
+    if len(limited) > max_chars:
+        limited = limited[:max_chars].rsplit(" ", 1)[0] + "..."
+    return limited
 
 # ---------------------------
-# --- SIDEBAR ARABE (TOGGLE/ZOOM) ---
+# SIDEBAR (ARABE)
 # ---------------------------
 with st.sidebar:
-    st.header("Affichage arabe")
+    st.header("🕌 Affichage arabe")
     if "hide_harakat" not in st.session_state:
         st.session_state.hide_harakat = False
     if "zoom_em" not in st.session_state:
         st.session_state.zoom_em = 1.5
 
-    st.session_state.hide_harakat = st.checkbox(
-        "Masquer les harakât (diacritiques)", value=st.session_state.hide_harakat
-    )
-    st.session_state.zoom_em = st.slider(
-        "🔍 Zoom texte arabe (em)", 1.0, 3.0, st.session_state.zoom_em, 0.1
-    )
+    st.session_state.hide_harakat = st.checkbox("Masquer les harakât (diacritiques)",
+                                                value=st.session_state.hide_harakat)
+    st.session_state.zoom_em = st.slider("🔍 Zoom texte arabe (em)",
+                                         1.0, 3.0, st.session_state.zoom_em, 0.1)
 
-def render_verset(verset_ar: str, weight: int = 600):
+def render_verset(verset_ar, weight=600):
+    """Affiche le verset arabe avec options de style."""
     display_text = remove_diacritics(verset_ar) if st.session_state.hide_harakat else verset_ar
     if not display_text:
-        st.write("")  # rien à afficher
         return
     st.markdown(
         f"<p style='font-size:{st.session_state.zoom_em}em; direction:rtl; text-align:right; font-weight:{weight};'>{display_text}</p>",
@@ -98,62 +104,58 @@ def render_verset(verset_ar: str, weight: int = 600):
     )
 
 # ---------------------------
-# --- CHARGEMENTS (MODELES + RESSOURCES) ---
+# CHARGEMENT DES RESSOURCES
 # ---------------------------
 @st.cache_resource(show_spinner=False)
 def load_tafsir_resources():
-    """Charge tafsir JSON, clés et embeddings + index NearestNeighbors."""
     try:
         with open("sq-saadi.json", "r", encoding="utf-8") as f:
             tafsir_data = json.load(f)
     except Exception as e:
-        logging.error(f"Impossible de charger sq-saadi.json : {e}")
+        logging.error(f"Erreur chargement sq-saadi.json : {e}")
         tafsir_data = {}
 
     try:
         with open("tafsir_keys.json", "r", encoding="utf-8") as f:
             tafsir_keys = json.load(f)
-    except Exception as e:
-        logging.error(f"Impossible de charger tafsir_keys.json : {e}")
+    except Exception:
         tafsir_keys = []
 
     try:
         embeddings = np.load("tafsir_embeddings.npy")
-    except Exception as e:
-        logging.error(f"Impossible de charger tafsir_embeddings.npy : {e}")
-        embeddings = np.zeros((0, 384))  # fallback
+    except Exception:
+        embeddings = np.zeros((0, 384))
 
     nn_index = None
-    if embeddings.size > 0 and embeddings.shape[0] > 0:
+    if embeddings.size > 0:
         try:
             n_neighbors = min(10, embeddings.shape[0])
             nn_index = NearestNeighbors(n_neighbors=n_neighbors, metric='cosine')
             nn_index.fit(embeddings)
         except Exception as e:
-            logging.error(f"Erreur création index NearestNeighbors : {e}")
-            nn_index = None
+            logging.error(f"Erreur index embeddings : {e}")
 
     return tafsir_data, tafsir_keys, embeddings, nn_index
 
 @st.cache_resource
 def load_sentence_model():
-    return SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2")
+    return SentenceTransformer("paraphrase-multilingual-MiniLM-L12-v2", show_progress_bar=False)
 
 @st.cache_resource
 def load_reranker_model():
-    return CrossEncoder('cross-encoder/ms-marco-MiniLM-L-6-v2')
+    return CrossEncoder("cross-encoder/ms-marco-MiniLM-L-6-v2")
 
 tafsir_data, tafsir_keys, tafsir_embeddings, tafsir_index = load_tafsir_resources()
 model = load_sentence_model()
 reranker = load_reranker_model()
 
 # ---------------------------
-# --- API QURAN (stable wrappers) ---
+# API ALQURAN.CLOUD
 # ---------------------------
 @st.cache_data(ttl=86400)
 def get_surahs():
     try:
-        r = requests.get("http://api.alquran.cloud/v1/surah", timeout=10)
+        r = requests.get("https://api.alquran.cloud/v1/surah", timeout=10)
         r.raise_for_status()
         return r.json().get("data", [])
     except Exception as e:
@@ -163,11 +165,11 @@ def get_surahs():
 @st.cache_data(ttl=86400)
 def get_verses(surah_num, translation_code="en.asad"):
     try:
-        url = f"http://api.alquran.cloud/v1/surah/{surah_num}/editions/quran-simple,{translation_code}"
+        url = f"https://api.alquran.cloud/v1/surah/{surah_num}/editions/quran-simple,{translation_code}"
         r = requests.get(url, timeout=10)
         r.raise_for_status()
         data = r.json().get("data", [])
-        return data
+        return data if isinstance(data, list) else [data]
     except Exception as e:
         logging.error(f"get_verses error: {e}")
         return []
@@ -175,142 +177,74 @@ def get_verses(surah_num, translation_code="en.asad"):
 @st.cache_data(ttl=86400)
 def get_audio_ayah(surah_num, ayah_num, reciter="ar.alafasy"):
     try:
-        r = requests.get(f"http://api.alquran.cloud/v1/ayah/{surah_num}:{ayah_num}/{reciter}", timeout=10)
+        r = requests.get(f"https://api.alquran.cloud/v1/ayah/{surah_num}:{ayah_num}/{reciter}", timeout=10)
         r.raise_for_status()
         d = r.json().get("data", {})
-        if isinstance(d, dict):
-            return d.get("audio") or d.get("Audio") or None
-        return None
+        return d.get("audio") or d.get("Audio")
     except Exception as e:
         logging.warning(f"get_audio_ayah error: {e}")
         return None
 
 # ---------------------------
-# --- RECHERCHE / RERANKER ---
+# RECHERCHE / RERANKING
 # ---------------------------
 def search_tafsir(query_translated, top_k=10):
-    """
-    Recherche par NearestNeighbors dans les embeddings (tafsir albanais).
-    query_translated doit être en albanais (sq).
-    """
-    if tafsir_index is None or len(tafsir_keys) == 0:
-        logging.info("Index ou clés tafsir non disponibles.")
+    if tafsir_index is None or not tafsir_keys:
         return []
-
     try:
-        query_embed = model.encode([query_translated], convert_to_tensor=False)
-    except Exception as e:
-        logging.error(f"Erreur encoding query: {e}")
-        return []
-
-    try:
-        # Ensure n_neighbors <= n_samples
-        n_neighbors = min(top_k, tafsir_embeddings.shape[0], tafsir_index.n_neighbors)
+        query_embed = model.encode([query_translated], convert_to_tensor=False, show_progress_bar=False)
+        n_neighbors = min(top_k, tafsir_embeddings.shape[0])
         distances, indices = tafsir_index.kneighbors(query_embed, n_neighbors=n_neighbors)
     except Exception as e:
-        logging.error(f"search_tafsir error (kneighbors): {e}")
+        logging.error(f"Erreur recherche : {e}")
         return []
 
     results = []
     for idx in indices[0]:
-        if idx < 0 or idx >= len(tafsir_keys):
+        if idx >= len(tafsir_keys):
             continue
         key = tafsir_keys[idx]
         tafsir_value = tafsir_data.get(key, "")
-        if isinstance(tafsir_value, dict):
-            tafsir_text = tafsir_value.get('text') or tafsir_value.get('tafsir') or ""
-        elif isinstance(tafsir_value, str):
-            tafsir_text = tafsir_value
-        else:
-            tafsir_text = ""
-        if tafsir_text and tafsir_text.strip():
+        tafsir_text = tafsir_value.get("text") if isinstance(tafsir_value, dict) else str(tafsir_value)
+        if tafsir_text.strip():
             results.append({"key": key, "tafsir": tafsir_text.strip()})
     return results
 
 def rerank_results(question, passages):
-    """Reranker avec CrossEncoder et normaliser les scores."""
     if not passages:
         return []
     try:
         pairs = [(question, p) for p in passages]
         scores = reranker.predict(pairs)
-        scores = np.array(scores, dtype=float)
-        min_s, max_s = float(np.min(scores)), float(np.max(scores))
-        if max_s - min_s > 1e-9:
-            norm_scores = (scores - min_s) / (max_s - min_s)
-        else:
-            norm_scores = np.ones_like(scores)
-        ranked = sorted(zip(passages, norm_scores.tolist()), key=lambda x: x[1], reverse=True)
-        return ranked  # [(passage, score), ...]
+        norm_scores = (scores - np.min(scores)) / (np.ptp(scores) + 1e-9)
+        return sorted(zip(passages, norm_scores.tolist()), key=lambda x: x[1], reverse=True)
     except Exception as e:
-        logging.error(f"rerank_results error: {e}")
+        logging.error(f"Reranking error: {e}")
         return [(p, 0.0) for p in passages]
 
 # ---------------------------
-# --- PIPELINE QA MULTILINGUE ---
+# PIPELINE Q&A MULTILINGUE
 # ---------------------------
-def _limit_text(text, max_chars=1200, max_sentences=6):
-    """Nettoyage et limitation : retire HTML, coupe en phrases puis en caractères."""
-    if not text:
-        return ""
-    # enlever balises HTML simples
-    t = re.sub(r"<[^>]+>", "", text)
-    # découper en phrases
-    sents = re.split(r'(?<=[.!?])\s+', t)
-    sents = [s.strip() for s in sents if s.strip()]
-    limited = " ".join(sents[:max_sentences])
-    if len(limited) > max_chars:
-        limited = limited[:max_chars].rsplit(" ", 1)[0] + "..."
-    return limited
-
 def qa_multilang(user_question):
-    """Pipeline : détecte la langue, traduit en albanais, recherche, rerank, retraduit et reformule."""
     lang_detected = detect_language_safe(user_question)
-
     if lang_detected == "unknown":
-        return "Impossible de détecter la langue, veuillez reformuler.", lang_detected
+        return "Impossible de détecter la langue.", lang_detected
 
-    target_embedding_lang = "sq"  # tafsir en albanais
+    # Traduction vers albanais
+    question_sq = safe_translate(user_question, src=lang_detected, target="sq") if lang_detected != "sq" else user_question
 
-    # Traduire la question vers l'albanais (si nécessaire)
-    if lang_detected != target_embedding_lang:
-        try:
-            # préciser la source améliore la fiabilité
-            question_translated = safe_translate(user_question, src=lang_detected, target=target_embedding_lang)
-        except Exception as e:
-            logging.warning(f"Traduction vers {target_embedding_lang} échouée : {e}")
-            return "Erreur lors de la traduction de la question.", lang_detected
-    else:
-        question_translated = user_question
-
-    # Recherche
-    results = search_tafsir(question_translated, top_k=10)
-    passages = [r['tafsir'] for r in results if isinstance(r['tafsir'], str) and r['tafsir'].strip()]
+    results = search_tafsir(question_sq, top_k=10)
+    passages = [r["tafsir"] for r in results if r.get("tafsir")]
     if not passages:
         return "Aucune réponse trouvée dans le tafsir albanais.", lang_detected
 
-    # Rerank (on reranker le texte en albanais; on passe la question traduite)
-    ranked = rerank_results(question_translated, passages)
-    # ranked = [(passage, score), ...]
-    best_passages = [p for p, s in ranked[:3]]
-    combined = " ".join(best_passages)
-    # Nettoyage + limitation
-    combined_limited = _limit_text(combined, max_chars=1200, max_sentences=6)
-    logging.info(f"Combined limited (len={len(combined_limited)}): {combined_limited[:300]!r}")
+    ranked = rerank_results(question_sq, passages)
+    combined = " ".join([p for p, _ in ranked[:3]])
+    combined_clean = _limit_text(combined)
 
-    # Retraduire la réponse dans la langue originale si besoin
-    if lang_detected != target_embedding_lang:
-        try:
-            answer_translated = safe_translate(combined, src=target_embedding_lang, target=lang_detected)
-        except Exception as e:
-            logging.warning(f"Retraduction échouée : {e}")
-            answer_translated = combined
-    else:
-        answer_translated = combined
-
-    # Reformulation légère pour fluidité (optionnel)
-    answer_refined = reformulate_text(answer_translated, lang_detected)
-    return answer_refined, lang_detected
+    # Retraduction vers langue d’origine
+    answer_translated = safe_translate(combined_clean, src="sq", target=lang_detected) if lang_detected != "sq" else combined_clean
+    return reformulate_text(answer_translated, lang_detected), lang_detected
 
 # ---------------------------
 # --- INTERFACE STREAMLIT ---
