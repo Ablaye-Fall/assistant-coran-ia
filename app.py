@@ -249,6 +249,20 @@ def rerank_results(question, passages):
 # ---------------------------
 # --- PIPELINE QA MULTILINGUE ---
 # ---------------------------
+def _limit_text(text, max_chars=1200, max_sentences=6):
+    """Nettoyage et limitation : retire HTML, coupe en phrases puis en caractères."""
+    if not text:
+        return ""
+    # enlever balises HTML simples
+    t = re.sub(r"<[^>]+>", "", text)
+    # découper en phrases
+    sents = re.split(r'(?<=[.!?])\s+', t)
+    sents = [s.strip() for s in sents if s.strip()]
+    limited = " ".join(sents[:max_sentences])
+    if len(limited) > max_chars:
+        limited = limited[:max_chars].rsplit(" ", 1)[0] + "..."
+    return limited
+
 def qa_multilang(user_question):
     """Pipeline : détecte la langue, traduit en albanais, recherche, rerank, retraduit et reformule."""
     lang_detected = detect_language_safe(user_question)
@@ -280,6 +294,9 @@ def qa_multilang(user_question):
     # ranked = [(passage, score), ...]
     best_passages = [p for p, s in ranked[:3]]
     combined = " ".join(best_passages)
+    # Nettoyage + limitation
+    combined_limited = _limit_text(combined, max_chars=1200, max_sentences=6)
+    logging.info(f"Combined limited (len={len(combined_limited)}): {combined_limited[:300]!r}")
 
     # Retraduire la réponse dans la langue originale si besoin
     if lang_detected != target_embedding_lang:
